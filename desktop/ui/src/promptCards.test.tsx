@@ -40,7 +40,7 @@ describe("DesignTemplateSelectionCard", () => {
     expect(html).toContain("推荐");
     expect(html).toContain("补充设计条件");
     expect(html).toContain("换一批");
-    expect(html).toContain("直接开发");
+    expect(html).toContain("不使用模板");
     expect(html).toContain("取消");
     expect(html).toContain("data-preview-type=\"image\"");
     expect(html).toContain("data-preview-type=\"html\"");
@@ -60,7 +60,7 @@ describe("DesignTemplateSelectionCard", () => {
     expect(html).toContain(">选择</button>");
     expect(html).not.toContain("补充设计条件");
     expect(html).not.toContain("换一批");
-    expect(html).not.toContain("直接开发");
+    expect(html).not.toContain("不使用模板");
     expect(html).not.toContain(">取消</button>");
   });
 
@@ -78,7 +78,7 @@ describe("DesignTemplateSelectionCard", () => {
     expect(html).toContain("换一批");
     expect(html).toContain(">取消</button>");
     expect(html).not.toContain(">选择</button>");
-    expect(html).not.toContain("直接开发");
+    expect(html).not.toContain("不使用模板");
   });
 
   it("终态收成紧凑结果，不再显示操作", () => {

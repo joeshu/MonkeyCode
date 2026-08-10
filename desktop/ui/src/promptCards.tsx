@@ -316,7 +316,7 @@ export function DesignTemplateSelectionCard({
       )}
       <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "flex-end", gap: 8, marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--line2)" }}>
         {item.allowedActions.cancel && <button type="button" disabled={!interactive} onClick={() => void submit("cancel")} style={buttonStyle}>取消</button>}
-        {item.allowedActions.direct && <button type="button" disabled={!interactive} onClick={() => void submit("direct")} style={buttonStyle}>直接开发</button>}
+        {item.allowedActions.direct && <button type="button" disabled={!interactive} onClick={() => void submit("direct")} style={buttonStyle}>不使用模板</button>}
         {item.allowedActions.next && <button type="button" disabled={!interactive} onClick={() => void submit("next")} style={buttonStyle}>换一批</button>}
         {item.allowedActions.select && <button type="button" disabled={!interactive || !selectedId} onClick={() => void submit("select")} style={{ ...buttonStyle, borderColor: "var(--acc)", background: selectedId ? "var(--acc)" : "var(--hov)", color: selectedId ? "var(--onAcc)" : "var(--t5)", cursor: interactive && selectedId ? "pointer" : "default" }}>{submitting ? "提交中…" : "选择"}</button>}
       </div>
