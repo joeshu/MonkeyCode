@@ -95,6 +95,9 @@ fn main() {
                 "preview_capture",
                 "preview_serialize",
                 "preview_save_html",
+                // 待办清单(todos.rs)
+                "todos_load",
+                "todos_save",
                 // 百智云/云端(baizhi/)
                 "baizhi_status",
                 "baizhi_send_code",
