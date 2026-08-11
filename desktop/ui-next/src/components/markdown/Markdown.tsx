@@ -612,11 +612,13 @@ function StreamingMarkdown({
   className,
   localImageUrl,
   onLocalLink,
+  onUrlLink,
 }: {
   source: string;
   className?: string;
   localImageUrl?: (path: string) => Promise<string>;
   onLocalLink?: (path: string) => void;
+  onUrlLink?: (url: string) => boolean;
 }) {
   const { locale } = useI18n();
   const root = useRef<HTMLDivElement>(null);
@@ -656,7 +658,7 @@ function StreamingMarkdown({
       ref={root}
       data-md-stream=""
       className={`md select-text ${className ?? ""}`}
-      onClick={(event) => onContainerClick(event, onLocalLink)}
+      onClick={(event) => onContainerClick(event, onLocalLink, onUrlLink)}
       onContextMenu={onContainerContextMenu}
     >
       {segments.stable.map((chunk, index) => (
@@ -679,6 +681,7 @@ export function Markdown(props: {
   className?: string;
   localImageUrl?: (path: string) => Promise<string>;
   onLocalLink?: (path: string) => void;
+  onUrlLink?: (url: string) => boolean;
   deferMermaid?: boolean;
 }) {
   return props.deferMermaid ? <StreamingMarkdown {...props} /> : <StaticMarkdown {...props} />;

@@ -161,11 +161,12 @@ export function HeaderSummary({ summary }: { summary?: string }) {
   );
 }
 
-/** 通用标题栏操作按钮；文件、临时目录与设计预览共享皮相。 */
-export function HeaderActionButton({ title, onClick, icon, children, badge, className = "" }: { title: string; onClick: () => void; icon: ReactNode; children: ReactNode; badge?: ReactNode; className?: string }) {
+/** 标题栏「文件」按钮(badge 位:本地放改动计数徽标;对话头部借同款
+ * 皮相放「临时目录」入口,label 可换) */
+export function HeaderFilesButton({ title, label = "文件", onClick, badge }: { title: string; label?: string; onClick: () => void; badge?: ReactNode }) {
   return (
     <button
-      className={`hv header-action-button ${className}`.trim()}
+      className="hv"
       title={title}
       onClick={onClick}
       style={{
@@ -185,20 +186,10 @@ export function HeaderActionButton({ title, onClick, icon, children, badge, clas
         flex: "none",
       }}
     >
-      {icon}
-      {children}
+      <IconFolder size={12} />
+      {label}
       {badge}
     </button>
-  );
-}
-
-/** 标题栏「文件」按钮(badge 位:本地放改动计数徽标;对话头部借同款
- * 皮相放「临时目录」入口,label 可换) */
-export function HeaderFilesButton({ title, label = "文件", onClick, badge }: { title: string; label?: string; onClick: () => void; badge?: ReactNode }) {
-  return (
-    <HeaderActionButton title={title} onClick={onClick} icon={<IconFolder size={12} />} badge={badge}>
-      {label}
-    </HeaderActionButton>
   );
 }
 
