@@ -2201,7 +2201,7 @@ dependencies = [
 
 [[package]]
 name = "monkeycode-desktop"
-version = "26081014.0.0"
+version = "26081207.0.0"
 dependencies = [
  "arboard",
  "base64 0.22.1",
