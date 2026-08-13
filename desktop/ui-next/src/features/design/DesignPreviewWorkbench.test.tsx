@@ -159,7 +159,9 @@ describe("DesignPreviewWorkbench native lifecycle", () => {
   it("serializes before editing and saves project-relative HTML through the backend", async () => {
     mount();
     await userEvent.click(screen.getByRole("tab", { name: /Code/ }));
-    expect(await screen.findByDisplayValue("<html>serialized</html>")).toBeTruthy();
+    const editor = await screen.findByDisplayValue("<html>serialized</html>");
+    expect(editor.getAttribute("wrap")).toBe("off");
+    expect(editor.className).toContain("size-full");
     await userEvent.clear(screen.getByLabelText("Project-relative HTML path"));
     await userEvent.type(screen.getByLabelText("Project-relative HTML path"), "pages/home.html");
     await userEvent.click(screen.getByRole("button", { name: "Save HTML" }));

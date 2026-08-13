@@ -298,8 +298,12 @@ export function DesignPreviewWorkbench({
     if (native) void previewNavigate(normalized).catch(report);
   };
   const serialize = async () => {
-    setTab("code"); setStatus("Serializing…");
-    try { setHtml(await requestSerialization()); setStatus(""); } catch (error) { report(error); }
+    setStatus("Serializing…");
+    try {
+      const serialized = await requestSerialization();
+      await previewHide();
+      setHtml(serialized); setTab("code"); setStatus("");
+    } catch (error) { report(error); }
   };
   const startCapture = async (mode: "viewport" | "full") => {
     setStatus("Capturing…");
@@ -396,7 +400,7 @@ export function DesignPreviewWorkbench({
           return <button key={name} className={`btn btn-square btn-xs ${preset === name ? "btn-active" : "btn-ghost"}`} title={name} onClick={() => setPreset(name as keyof typeof PRESETS)}><Icon size={14} stroke={1.75} /></button>;
         })}
         <div role="tablist" className="tabs tabs-box tabs-xs ms-1">
-          <button role="tab" className={`tab ${tab === "preview" ? "tab-active" : ""}`} onClick={() => setTab("preview")}>Preview</button>
+          <button role="tab" className={`tab ${tab === "preview" ? "tab-active" : ""}`} onClick={() => { setTab("preview"); requestAnimationFrame(() => void previewShow().then(bounds).catch(report)); }}>Preview</button>
           <button role="tab" className={`tab ${tab === "code" ? "tab-active" : ""}`} onClick={() => void serialize()}><IconCode size={12} stroke={1.75} /> Code</button>
         </div>
         <button className={`btn btn-xs ms-auto ${picker ? "btn-primary" : "btn-ghost"}`} onClick={() => { const next = !picker; setPicker(next); void previewPickerToggle(next).catch(report); }}><IconPointer size={13} stroke={1.75} /> Pick</button>
