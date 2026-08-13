@@ -43,8 +43,11 @@ export function listen<T>(name: string, cb: (payload: T) => void): () => void {
   const event = tauri()?.event;
   if (!event) return () => {};
   const pending = event.listen(name, (e) => cb(e.payload as T));
+  let closed = false;
   return () => {
-    void pending.then((off) => off());
+    if (closed) return;
+    closed = true;
+    void pending.then((off) => off()).catch(() => {});
   };
 }
 
@@ -53,5 +56,11 @@ export function listen<T>(name: string, cb: (payload: T) => void): () => void {
 export async function listenAsync<T>(name: string, cb: (payload: T) => void): Promise<() => void> {
   const event = tauri()?.event;
   if (!event) return () => {};
-  return event.listen(name, (e) => cb(e.payload as T));
+  const off = await event.listen(name, (e) => cb(e.payload as T));
+  let closed = false;
+  return () => {
+    if (closed) return;
+    closed = true;
+    void Promise.resolve(off()).catch(() => {});
+  };
 }
