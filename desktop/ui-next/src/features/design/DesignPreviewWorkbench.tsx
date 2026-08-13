@@ -414,11 +414,11 @@ export function DesignPreviewWorkbench({
           : null
         ) : tab === "preview" ? (
           <div className="flex size-full justify-center overflow-auto p-2">
-            <div ref={hostRef} data-preview-host="" style={{ width: `min(100%, ${PRESETS[preset]}px)` }} className="h-full min-w-40 bg-base-100" />
+            <div ref={hostRef} data-preview-host="" style={{ width: preset === "desktop" ? "100%" : `min(100%, ${PRESETS[preset]}px)` }} className="h-full min-w-40 bg-base-100" />
           </div>
         ) : (
           <div className="flex size-full flex-col gap-2 p-2">
-            <textarea aria-label="Serialized HTML" className="textarea min-h-0 flex-1 resize-none font-mono text-xs" value={html} onChange={(e) => setHtml(e.target.value)} />
+            <textarea aria-label="Serialized HTML" wrap="off" className="textarea size-full min-h-0 min-w-0 flex-1 resize-none overflow-auto whitespace-pre font-mono text-xs" value={html} onChange={(e) => setHtml(e.target.value)} />
             <div className="flex gap-2">
               <input aria-label="Project-relative HTML path" className="input input-sm min-w-0 flex-1 font-mono" value={savePath} onChange={(e) => setSavePath(e.target.value)} />
               <button className="btn btn-primary btn-sm" onClick={() => void previewSaveHtml(sessionId, savePath, html).then(() => setStatus(`Saved ${savePath}`), report)}>Save HTML</button>
