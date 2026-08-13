@@ -82,10 +82,16 @@ describe("DesignPreviewWorkbench native lifecycle", () => {
     expect(calls.some((c) => c.cmd === "session_call" && (c.args?.payload as { path?: string })?.path === "pages/second.html")).toBe(true);
   });
 
+  it("renders workspace HTML directly instead of relying on a blob frame URL", async () => {
+    render(<DesignPreviewWorkbench sessionId="s1" initialTarget={{ kind: "artifact", path: "pages/home.html", artifactKind: "html" }} composer={composer} obscured={false} onClose={() => {}} />);
+
+    const iframe = await screen.findByTitle("Preview pages/home.html");
+    expect(iframe.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(iframe.getAttribute("srcdoc")).toBe("<html>pages/home.html</html>");
+    expect(iframe.hasAttribute("src")).toBe(false);
+  });
+
   it("browses, searches and renders HTML, image and text workspace artifacts", async () => {
-    const createObjectURL = vi.fn(() => "blob:preview-html");
-    const revokeObjectURL = vi.fn();
-    vi.stubGlobal("URL", { ...URL, createObjectURL, revokeObjectURL });
     mount();
 
     const choose = async (query: string, path: string) => {
@@ -99,7 +105,7 @@ describe("DesignPreviewWorkbench native lifecycle", () => {
     await choose("home", "pages/home.html");
     const iframe = await screen.findByTitle("Preview pages/home.html");
     expect(iframe.getAttribute("sandbox")).toBe("allow-scripts");
-    expect(iframe.getAttribute("src")).toBe("blob:preview-html");
+    expect(iframe.getAttribute("srcdoc")).toBe("<html>pages/home.html</html>");
 
     await choose("hero", "images/hero.png");
     expect((await screen.findByRole("img", { name: "images/hero.png" })).getAttribute("src")).toBe("data:image/png;base64,AQID");

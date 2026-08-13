@@ -110,7 +110,6 @@ export function DesignPreviewWorkbench({
   const [filesTruncated, setFilesTruncated] = useState(false);
   const [fileQuery, setFileQuery] = useState("");
   const [artifact, setArtifact] = useState<RepoArtifact | null>(null);
-  const [artifactBlobUrl, setArtifactBlobUrl] = useState("");
   const [filesLoading, setFilesLoading] = useState(false);
   const [tab, setTab] = useState<"preview" | "code">("preview");
   const [zoom, setZoom] = useState(100);
@@ -252,13 +251,6 @@ export function DesignPreviewWorkbench({
     }, (error) => active && report(error));
     return () => { active = false; };
   }, [sessionId, target, report]);
-
-  useEffect(() => {
-    if (artifact?.kind !== "html") { setArtifactBlobUrl(""); return; }
-    const url = URL.createObjectURL(new Blob([artifact.content], { type: "text/html" }));
-    setArtifactBlobUrl(url);
-    return () => URL.revokeObjectURL(url);
-  }, [artifact]);
 
   useEffect(() => {
     if (!createdRef.current) return;
@@ -403,7 +395,7 @@ export function DesignPreviewWorkbench({
       {status && <div role="status" className="shrink-0 border-b border-base-300 px-3 py-1 text-xs text-base-content/60">{status}</div>}
       <div className="relative min-h-0 flex-1 overflow-hidden bg-base-200">
         {!native ? (
-          artifact?.kind === "html" && artifactBlobUrl ? <iframe title={`Preview ${artifact.path}`} src={artifactBlobUrl} sandbox="allow-scripts" className="size-full border-0 bg-white" />
+          artifact?.kind === "html" ? <iframe title={`Preview ${artifact.path}`} srcDoc={artifact.content} sandbox="allow-scripts" className="size-full border-0 bg-white" />
           : artifact?.kind === "image" ? <div className="flex size-full items-center justify-center overflow-auto p-2"><img src={artifact.dataUrl} alt={artifact.path} className="max-h-full max-w-full" /></div>
           : artifact?.kind === "text" ? <div className="size-full overflow-auto"><CodeView path={artifact.path} text={artifact.content} /></div>
           : null
