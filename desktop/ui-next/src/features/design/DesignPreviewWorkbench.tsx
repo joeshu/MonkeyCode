@@ -1,11 +1,14 @@
 import {
   IconArrowBackUp, IconBrowser, IconCamera, IconCode, IconDeviceDesktop, IconDeviceMobile,
   IconDeviceTablet, IconDownload, IconMessage, IconPencil, IconPointer, IconRefresh,
-  IconSend, IconSquare, IconTrash, IconX,
+  IconSend, IconSquare, IconTrash, IconX, IconFolder,
 } from "@tabler/icons-react";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 
 import type { ComposerCtl } from "@/features/chat/composer/useComposer";
+import { CodeView } from "@/features/files/CodeView";
+import { repoArtifactRead, repoPreviewFiles, type RepoArtifact, type RepoPreviewFile } from "@/lib/ipc/repo";
+import { rankPreviewFiles, targetForFile, type DesignPreviewTarget } from "./previewArtifact";
 import {
   onPreviewElementPicked, onPreviewPickerError, onPreviewResultAction, previewCreate, previewDestroy,
   previewElementApply, previewElementUndo, previewHide, previewNavigate, previewPickerToggle,
@@ -84,14 +87,15 @@ function feedbackOf(url: string, annotations: Annotation[]) {
 }
 
 export function DesignPreviewWorkbench({
-  sessionId, initialUrl, composer, obscured, onClose,
+  sessionId, initialTarget, composer, obscured, onClose,
 }: {
   sessionId: string;
-  initialUrl: string;
+  initialTarget: DesignPreviewTarget;
   composer: ComposerCtl;
   obscured: boolean;
   onClose(): void;
 }) {
+  const initialUrl = initialTarget.kind === "localhost" ? initialTarget.url : "";
   const paneRef = useRef<HTMLElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
   const liveRef = useRef(0);
@@ -99,7 +103,15 @@ export function DesignPreviewWorkbench({
   const latestRef = useRef({ sessionId, initialUrl });
   latestRef.current = { sessionId, initialUrl };
   const [paneWidth, setPaneWidth] = useState<number | string>("65%");
+  const [target, setTarget] = useState<DesignPreviewTarget>(initialTarget);
   const [address, setAddress] = useState(initialUrl);
+  const [filesOpen, setFilesOpen] = useState(false);
+  const [previewFiles, setPreviewFiles] = useState<RepoPreviewFile[] | null>(null);
+  const [filesTruncated, setFilesTruncated] = useState(false);
+  const [fileQuery, setFileQuery] = useState("");
+  const [artifact, setArtifact] = useState<RepoArtifact | null>(null);
+  const [artifactBlobUrl, setArtifactBlobUrl] = useState("");
+  const [filesLoading, setFilesLoading] = useState(false);
   const [tab, setTab] = useState<"preview" | "code">("preview");
   const [zoom, setZoom] = useState(100);
   const [preset, setPreset] = useState<keyof typeof PRESETS>("desktop");
@@ -119,7 +131,23 @@ export function DesignPreviewWorkbench({
   const feedbackSendingRef = useRef(false);
   const [feedbackSending, setFeedbackSending] = useState(false);
 
-  const hidden = obscured || tab === "code" || !!capture || !!picked;
+  useEffect(() => {
+    setTarget(initialTarget);
+    if (initialTarget.kind === "localhost") setAddress(initialTarget.url);
+    setFilesOpen(false);
+  }, [initialTarget]);
+
+  const native = target.kind === "localhost";
+  const hidden = !native || obscured || tab === "code" || !!capture || !!picked;
+  const visibleFiles = useMemo(() => rankPreviewFiles(previewFiles ?? [], fileQuery), [previewFiles, fileQuery]);
+  const loadFiles = useCallback(async () => {
+    setFilesLoading(true);
+    try {
+      const result = await repoPreviewFiles(sessionId);
+      setPreviewFiles(result.files); setFilesTruncated(result.truncated);
+    } catch (error) { setStatus(error instanceof Error ? error.message : String(error)); }
+    finally { setFilesLoading(false); }
+  }, [sessionId]);
   const report = useCallback((error: unknown) => setStatus(error instanceof Error ? error.message : String(error)), []);
   const submitFeedback = useCallback(async (image: string, feedbackAnnotations: Annotation[]): Promise<boolean> => {
     if (feedbackSendingRef.current) return false;
@@ -160,7 +188,12 @@ export function DesignPreviewWorkbench({
 
   useLayoutEffect(() => {
     const generation = ++liveRef.current;
-    const url = normalizePreviewUrl(initialUrl);
+    const url = target.kind === "localhost" ? normalizePreviewUrl(target.url) : null;
+    if (!url) {
+      createdRef.current = false;
+      void previewDestroy().catch(() => {});
+      return;
+    }
     let starting = false;
     const sync = () => {
       const host = hostRef.current;
@@ -188,9 +221,9 @@ export function DesignPreviewWorkbench({
       window.removeEventListener("resize", sync);
       void previewDestroy().catch(() => {});
     };
-    // initialUrl changes navigate through the dedicated effect below; session owns creation.
+    // URL changes navigate through the dedicated effect below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]);
+  }, [sessionId, target.kind]);
 
   useLayoutEffect(() => {
     if (tab !== "preview" || !hostRef.current) return;
@@ -202,11 +235,30 @@ export function DesignPreviewWorkbench({
   }, [tab, bounds]);
 
   useEffect(() => {
-    const url = normalizePreviewUrl(initialUrl);
+    if (target.kind !== "localhost") return;
+    const url = normalizePreviewUrl(target.url);
     if (!url) return;
     setAddress(url);
     if (createdRef.current) void previewNavigate(url).catch(report);
-  }, [initialUrl, report]);
+  }, [target, report]);
+
+  useEffect(() => {
+    if (target.kind !== "artifact") { setArtifact(null); return; }
+    let active = true;
+    setStatus("Loading artifact…");
+    void repoArtifactRead(sessionId, target.path).then((value) => {
+      if (!active) return;
+      setArtifact(value); setStatus(""); setTab("preview");
+    }, (error) => active && report(error));
+    return () => { active = false; };
+  }, [sessionId, target, report]);
+
+  useEffect(() => {
+    if (artifact?.kind !== "html") { setArtifactBlobUrl(""); return; }
+    const url = URL.createObjectURL(new Blob([artifact.content], { type: "text/html" }));
+    setArtifactBlobUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [artifact]);
 
   useEffect(() => {
     if (!createdRef.current) return;
@@ -239,8 +291,8 @@ export function DesignPreviewWorkbench({
   const navigate = () => {
     const normalized = normalizePreviewUrl(address);
     if (!normalized) { setStatus("Only localhost, 127.0.0.1 and [::1] HTTP(S) URLs are allowed."); return; }
-    setAddress(normalized); setStatus("");
-    void previewNavigate(normalized).catch(report);
+    setAddress(normalized); setTarget({ kind: "localhost", url: normalized }); setStatus("");
+    if (native) void previewNavigate(normalized).catch(report);
   };
   const serialize = async () => {
     setTab("code"); setStatus("Serializing…");
@@ -316,14 +368,23 @@ export function DesignPreviewWorkbench({
           window.addEventListener("pointermove", move); window.addEventListener("pointerup", up, { once: true });
         }}
       />
-      <div className="flex h-10 shrink-0 items-center gap-1 border-b border-base-300 px-2">
-        <IconBrowser size={15} stroke={1.75} className="shrink-0 text-base-content/50" aria-hidden />
-        <input aria-label="Preview address" className="input input-xs min-w-24 flex-1 font-mono" value={address} onChange={(e) => setAddress(e.target.value)} onKeyDown={(e) => e.key === "Enter" && navigate()} />
-        <button className="btn btn-ghost btn-square btn-xs" title="Navigate" onClick={navigate}>→</button>
-        <button className="btn btn-ghost btn-square btn-xs" title="Reload" onClick={() => void previewReload().catch(report)}><IconRefresh size={14} stroke={1.75} /></button>
+      <div className="relative flex h-10 shrink-0 items-center gap-1 border-b border-base-300 px-2">
+        <button aria-label="Choose workspace preview file" className="btn btn-ghost btn-square btn-xs" onClick={() => { const open = !filesOpen; setFilesOpen(open); if (open && previewFiles === null) void loadFiles(); }}><IconFolder size={14} /></button>
+        {native ? <>
+          <IconBrowser size={15} stroke={1.75} className="shrink-0 text-base-content/50" aria-hidden />
+          <input aria-label="Preview address" className="input input-xs min-w-24 flex-1 font-mono" value={address} onChange={(e) => setAddress(e.target.value)} onKeyDown={(e) => e.key === "Enter" && navigate()} />
+          <button className="btn btn-ghost btn-square btn-xs" title="Navigate" onClick={navigate}>→</button>
+          <button className="btn btn-ghost btn-square btn-xs" title="Reload" onClick={() => void previewReload().catch(report)}><IconRefresh size={14} stroke={1.75} /></button>
+        </> : <span className="min-w-0 flex-1 truncate font-mono text-xs" title={target.kind === "artifact" ? target.path : ""}>{target.kind === "artifact" ? target.path : ""}</span>}
         <button className="btn btn-ghost btn-square btn-xs" title="Close preview" onClick={onClose}><IconX size={14} stroke={1.75} /></button>
+        {filesOpen && <div className="absolute inset-x-2 top-10 z-40 max-h-72 overflow-auto rounded-box border border-base-300 bg-base-100 p-2 shadow-lg">
+          <div className="flex gap-1"><input autoFocus aria-label="Search preview files" className="input input-xs min-w-0 flex-1" placeholder="Search workspace files" value={fileQuery} onChange={(e) => setFileQuery(e.target.value)} /><button className="btn btn-ghost btn-xs" disabled={filesLoading} onClick={() => void loadFiles()}><IconRefresh size={13} /> Refresh</button></div>
+          {filesTruncated && <p className="py-1 text-xs text-warning">Results truncated</p>}
+          <div className="mt-1 flex flex-col">{visibleFiles.map((file) => <button key={file.path} className="btn btn-ghost btn-sm h-auto min-h-8 justify-start font-mono text-xs" title={file.path} onClick={() => { setTarget(targetForFile(file)); setFilesOpen(false); }}>{file.path}</button>)}</div>
+          {!filesLoading && visibleFiles.length === 0 && <p className="p-2 text-xs text-base-content/60">No previewable files</p>}
+        </div>}
       </div>
-      <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-1 border-b border-base-300 px-2 py-1">
+      {native && <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-1 border-b border-base-300 px-2 py-1">
         {Object.entries(PRESETS).map(([name]) => {
           const Icon = name === "desktop" ? IconDeviceDesktop : name === "tablet" ? IconDeviceTablet : IconDeviceMobile;
           return <button key={name} className={`btn btn-square btn-xs ${preset === name ? "btn-active" : "btn-ghost"}`} title={name} onClick={() => setPreset(name as keyof typeof PRESETS)}><Icon size={14} stroke={1.75} /></button>;
@@ -338,10 +399,15 @@ export function DesignPreviewWorkbench({
         <select aria-label="Zoom" className="select select-xs w-20" value={zoom} onChange={(e) => { const n = Math.min(500, Math.max(10, Number(e.target.value))); setZoom(n); void previewSetZoom(n / 100).catch(report); }}>
           {[10, 25, 50, 75, 100, 125, 150, 200, 300, 400, 500].map((n) => <option key={n} value={n}>{n}%</option>)}
         </select>
-      </div>
+      </div>}
       {status && <div role="status" className="shrink-0 border-b border-base-300 px-3 py-1 text-xs text-base-content/60">{status}</div>}
       <div className="relative min-h-0 flex-1 overflow-hidden bg-base-200">
-        {tab === "preview" ? (
+        {!native ? (
+          artifact?.kind === "html" && artifactBlobUrl ? <iframe title={`Preview ${artifact.path}`} src={artifactBlobUrl} sandbox="allow-scripts" className="size-full border-0 bg-white" />
+          : artifact?.kind === "image" ? <div className="flex size-full items-center justify-center overflow-auto p-2"><img src={artifact.dataUrl} alt={artifact.path} className="max-h-full max-w-full" /></div>
+          : artifact?.kind === "text" ? <div className="size-full overflow-auto"><CodeView path={artifact.path} text={artifact.content} /></div>
+          : null
+        ) : tab === "preview" ? (
           <div className="flex size-full justify-center overflow-auto p-2">
             <div ref={hostRef} data-preview-host="" style={{ width: `min(100%, ${PRESETS[preset]}px)` }} className="h-full min-w-40 bg-base-100" />
           </div>

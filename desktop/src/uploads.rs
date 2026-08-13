@@ -411,6 +411,42 @@ pub fn read_data_url(
     ))
 }
 
+pub(crate) fn read_workspace_html_bundle(
+    workdir: &str,
+    wsl_distro: Option<&str>,
+    path: &str,
+) -> Result<String, String> {
+    let raw = path.trim();
+    let requested = Path::new(raw);
+    if raw.is_empty()
+        || requested.is_absolute()
+        || requested
+            .components()
+            .any(|c| !matches!(c, std::path::Component::Normal(_)))
+    {
+        return Err("工作区 HTML 路径必须是无 traversal 的相对路径".into());
+    }
+    let workspace = uploads_root(workdir, wsl_distro)?;
+    let canonical_workspace =
+        std::fs::canonicalize(&workspace).map_err(|e| format!("工作区路径无效: {e}"))?;
+    let candidate = workspace.join(requested);
+    reject_symlink(&workspace, &candidate)?;
+    let canonical = checked_bundle_file(&workspace, &canonical_workspace, &candidate)?;
+    if bundle_mime(&canonical) != Some("text/html") {
+        return Err("工作区预览文件必须是 HTML".into());
+    }
+    let mut inliner = BundleInliner {
+        workspace: &canonical_workspace,
+        root: &canonical_workspace,
+        total: 0,
+        active_resources: HashSet::new(),
+    };
+    let bytes = inliner.read_file(&canonical)?;
+    let html = String::from_utf8(bytes).map_err(|_| "工作区 HTML 必须是 UTF-8".to_string())?;
+    let html = inliner.rewrite_html(&html, canonical.parent().ok_or("HTML 入口无父目录")?)?;
+    Ok(inject_bundle_csp(&html))
+}
+
 pub fn read_design_template_html(
     workdir: &str,
     wsl_distro: Option<&str>,
@@ -476,10 +512,61 @@ pub fn read_design_template_html(
     let bytes = inliner.read_file(&canonical)?;
     let html = String::from_utf8(bytes).map_err(|_| "模板预览 HTML 必须是 UTF-8".to_string())?;
     let html = inliner.rewrite_html(&html, canonical.parent().ok_or("模板预览入口无父目录")?)?;
-    // First parser token: even malformed bundles cannot execute before the policy.
+    Ok(inject_bundle_csp(&html))
+}
+
+/// Keep a document declaration as the first parser token while placing the policy
+/// before every executable HTML element. A run of leading comments is scanned so
+/// a following declaration remains ahead of the policy. BOM and leading HTML
+/// whitespace are preserved.
+fn inject_bundle_csp(html: &str) -> String {
     let policy =
         format!(r#"<meta http-equiv="Content-Security-Policy" content="{DESIGN_TEMPLATE_CSP}">"#);
-    Ok(format!("{policy}{html}"))
+    let bom_len = usize::from(html.starts_with('\u{feff}')) * '\u{feff}'.len_utf8();
+    let html_whitespace = |byte: u8| matches!(byte, b'\t' | b'\n' | 0x0c | b'\r' | b' ');
+    let skip_whitespace = |mut at: usize| {
+        while html
+            .as_bytes()
+            .get(at)
+            .is_some_and(|byte| html_whitespace(*byte))
+        {
+            at += 1;
+        }
+        at
+    };
+    let token_start = skip_whitespace(bom_len);
+    let mut scan_at = token_start;
+
+    loop {
+        let token = &html[scan_at..];
+        if !token.starts_with("<!--") {
+            break;
+        }
+        let Some(end) = token[4..].find("-->") else {
+            break;
+        };
+        scan_at = skip_whitespace(scan_at + 4 + end + 3);
+    }
+
+    let token = &html[scan_at..];
+    if token
+        .get(..9)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("<!doctype"))
+    {
+        let mut quote = None;
+        for (offset, byte) in token.as_bytes().iter().copied().enumerate() {
+            match (quote, byte) {
+                (None, b'\'' | b'"') => quote = Some(byte),
+                (Some(open), close) if open == close => quote = None,
+                (None, b'>') => {
+                    let insert_at = scan_at + offset + 1;
+                    return format!("{}{policy}{}", &html[..insert_at], &html[insert_at..]);
+                }
+                _ => {}
+            }
+        }
+    }
+    format!("{}{policy}{}", &html[..token_start], &html[token_start..])
 }
 
 struct BundleInliner<'a> {
@@ -519,13 +606,15 @@ impl BundleInliner<'_> {
         let path_part = url.split(['?', '#']).next().unwrap_or("");
         let decoded = percent_decode_path(path_part)?;
         let requested = Path::new(&decoded);
-        if requested.is_absolute() {
-            return Err("模板预览资源路径不允许 absolute".into());
-        }
-        // `../` is normal inside nested CSS (for example styles/app.css ->
-        // ../fonts/x.woff2). Canonical containment below rejects escape, while
-        // reject_symlink inspects every traversed component before canonicalize.
-        let candidate = base.join(requested);
+        // A single leading slash is a site-root-relative URL (protocol-relative
+        // `//host` was excluded above). Its site root is deliberately the scoped
+        // bundle root: workspace previews use the workspace, while templates use
+        // only their digest directory.
+        let candidate = if let Some(root_relative) = decoded.strip_prefix('/') {
+            self.root.join(root_relative)
+        } else {
+            base.join(requested)
+        };
         reject_symlink(self.workspace, &candidate)?;
         Ok(Some(checked_bundle_file(
             self.workspace,
@@ -982,6 +1071,98 @@ mod tests {
     }
 
     #[test]
+    fn workspace_html_bundle_inlines_relative_and_root_relative_assets_and_rejects_escape() {
+        let tmp = TempDir::new();
+        std::fs::create_dir_all(tmp.0.join("site/assets")).unwrap();
+        std::fs::create_dir_all(tmp.0.join("assets")).unwrap();
+        std::fs::write(
+            tmp.0.join("site/index.html"),
+            "<link rel=\"stylesheet\" href=\"/assets/main.css\"><img src=\"/assets/a.png\"><script src=\"/assets/app.js\"></script><img src=\"assets/local.png\">",
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.0.join("assets/main.css"),
+            "body{background:url(/assets/a.png)}",
+        )
+        .unwrap();
+        std::fs::write(tmp.0.join("assets/a.png"), b"root-png").unwrap();
+        std::fs::write(tmp.0.join("assets/app.js"), b"window.ready=true").unwrap();
+        std::fs::write(tmp.0.join("site/assets/local.png"), b"local-png").unwrap();
+        let html =
+            read_workspace_html_bundle(&tmp.0.to_string_lossy(), None, "site/index.html").unwrap();
+        assert!(html.starts_with("<meta http-equiv=\"Content-Security-Policy\""));
+        assert!(html.contains("data:text/css;base64,"));
+        assert!(html.contains("data:text/javascript;base64,"));
+        assert!(html.matches("data:image/png;base64,").count() >= 2);
+        assert!(
+            read_workspace_html_bundle(&tmp.0.to_string_lossy(), None, "../outside.html").is_err()
+        );
+        std::fs::write(tmp.0.join("escape.html"), "<img src=\"/../outside.png\">").unwrap();
+        std::fs::write(tmp.0.parent().unwrap().join("outside.png"), b"outside").unwrap();
+        assert!(read_workspace_html_bundle(&tmp.0.to_string_lossy(), None, "escape.html").is_err());
+    }
+
+    #[test]
+    fn bundle_csp_preserves_doctype_as_first_document_token() {
+        let tmp = TempDir::new();
+        std::fs::write(
+            tmp.0.join("index.html"),
+            "\u{feff}  <!DoCtYpE html><html><head><script>window.x=1</script></head></html>",
+        )
+        .unwrap();
+        let workspace =
+            read_workspace_html_bundle(&tmp.0.to_string_lossy(), None, "index.html").unwrap();
+        assert!(workspace.starts_with("\u{feff}  <!DoCtYpE html><meta "));
+        assert!(
+            workspace.find("Content-Security-Policy").unwrap()
+                < workspace.find("<script>").unwrap()
+        );
+
+        let root = tmp.0.join(DESIGN_TEMPLATE_PREVIEW_ROOT).join("card");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("index.html"),
+            "<!DOCTYPE html><html><body></body></html>",
+        )
+        .unwrap();
+        let template = read_design_template_html(&tmp.0.to_string_lossy(), None, "card").unwrap();
+        assert!(template.starts_with("<!DOCTYPE html><meta "));
+    }
+
+    #[test]
+    fn bundle_csp_scans_leading_comments_and_quoted_doctype_end_markers() {
+        let generated = "\u{feff} \n<!-- generated --><!-- second -->\r<!doctype html PUBLIC \"quoted > marker\" 'single > marker'><html></html>";
+        let bundled = inject_bundle_csp(generated);
+        let declaration = "<!doctype html PUBLIC \"quoted > marker\" 'single > marker'>";
+        assert!(bundled.starts_with("\u{feff} \n<!-- generated --><!-- second -->\r"));
+        assert!(bundled.find(declaration).unwrap() < bundled.find("<meta ").unwrap());
+        assert!(bundled.contains(&format!("{declaration}<meta ")));
+    }
+
+    #[test]
+    fn bundle_csp_without_doctype_precedes_leading_comment() {
+        let bundled = inject_bundle_csp(" \n<!-- generated --><html></html>");
+        assert!(bundled.starts_with(" \n<meta "));
+        assert!(bundled.find("<meta ").unwrap() < bundled.find("<!-- generated -->").unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn workspace_html_bundle_rejects_symlink_entry_and_resource() {
+        use std::os::unix::fs::symlink;
+        let tmp = TempDir::new();
+        std::fs::create_dir_all(tmp.0.join("site")).unwrap();
+        std::fs::write(tmp.0.join("site/index.html"), "<img src=\"linked.png\">").unwrap();
+        std::fs::write(tmp.0.join("site/image.png"), b"png").unwrap();
+        symlink(tmp.0.join("site/index.html"), tmp.0.join("entry.html")).unwrap();
+        symlink(tmp.0.join("site/image.png"), tmp.0.join("site/linked.png")).unwrap();
+        assert!(read_workspace_html_bundle(&tmp.0.to_string_lossy(), None, "entry.html").is_err());
+        assert!(
+            read_workspace_html_bundle(&tmp.0.to_string_lossy(), None, "site/index.html").is_err()
+        );
+    }
+
+    #[test]
     fn design_template_bundle_inlines_nested_css_font_image_and_script() {
         let tmp = TempDir::new();
         let root = tmp.0.join(DESIGN_TEMPLATE_PREVIEW_ROOT).join("card");
@@ -989,7 +1170,7 @@ mod tests {
         std::fs::create_dir_all(root.join("scripts")).unwrap();
         std::fs::create_dir_all(root.join("images")).unwrap();
         std::fs::create_dir_all(root.join("fonts")).unwrap();
-        std::fs::write(root.join("index.html"), r#"<link rel="stylesheet" href="styles/main.css"><style>.inline{background:url('images/card.png')}</style><img src="images/card.png"><script src="scripts/app.js"></script><script type="module">import './scripts/nested.js'</script>"#).unwrap();
+        std::fs::write(root.join("index.html"), r#"<link rel="stylesheet" href="/styles/main.css"><style>.inline{background:url('images/card.png')}</style><img src="/images/card.png"><script src="/scripts/app.js"></script><script type="module">import './scripts/nested.js'</script>"#).unwrap();
         std::fs::write(
             root.join("styles/main.css"),
             r#"@import "nested/theme.css"; .hero{background:url('../images/card.png')}"#,

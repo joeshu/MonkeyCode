@@ -22,6 +22,17 @@ beforeEach(() => {
       if (cmd === "preview_create" && deferCreates) await new Promise<void>((resolve) => pendingCreates.push(resolve));
       if (cmd === "preview_serialize") queueMicrotask(() => events.get("preview-serialized")?.({ payload: { requestId: args?.requestId, html: "<html>serialized</html>" } }));
       if (cmd === "preview_capture") queueMicrotask(() => events.get("preview-captured")?.({ payload: { requestId: args?.requestId, dataUrl: "data:image/png;base64,AQID" } }));
+      if (cmd === "session_call" && args?.kind === "repo_artifact_read") {
+        const path = (args.payload as { path?: string } | undefined)?.path ?? "";
+        if (path.endsWith(".png")) return { result: { path, kind: "image", mime: "image/png", data_url: "data:image/png;base64,AQID" } };
+        if (path.endsWith(".txt")) return { result: { path, kind: "text", mime: "text/plain", content: "preview text content" } };
+        return { result: { path, kind: "html", mime: "text/html", content: `<html>${path}</html>` } };
+      }
+      if (cmd === "session_call" && args?.kind === "repo_preview_files") return { result: { files: [
+        { path: "pages/home.html", kind: "html", mime: "text/html", size: 10 },
+        { path: "images/hero.png", kind: "image", mime: "image/png", size: 20 },
+        { path: "notes/readme.txt", kind: "text", mime: "text/plain", size: 30 },
+      ], truncated: false } };
     } },
     event: { listen: async (name: string, cb: EventCb) => { events.set(name, cb); return () => events.delete(name); } },
   };
@@ -32,7 +43,7 @@ afterEach(() => { delete (window as unknown as { __TAURI__?: unknown }).__TAURI_
 const composer = { sendWithFiles: vi.fn(async () => true) } as unknown as ComposerCtl;
 
 function mount(obscured = false) {
-  return render(<DesignPreviewWorkbench sessionId="s1" initialUrl="http://localhost:5173/app" composer={composer} obscured={obscured} onClose={() => {}} />);
+  return render(<DesignPreviewWorkbench sessionId="s1" initialTarget={{ kind: "localhost", url: "http://localhost:5173/app" }} composer={composer} obscured={obscured} onClose={() => {}} />);
 }
 
 describe("DesignPreviewWorkbench native lifecycle", () => {
@@ -40,9 +51,9 @@ describe("DesignPreviewWorkbench native lifecycle", () => {
     const view = mount();
     await waitFor(() => expect(calls.some((c) => c.cmd === "preview_create")).toBe(true));
     expect(calls.find((c) => c.cmd === "preview_create")?.args?.bounds).toEqual({ x: 400, y: 80, width: 600, height: 400 });
-    view.rerender(<DesignPreviewWorkbench sessionId="s1" initialUrl="http://localhost:5173/app" composer={composer} obscured onClose={() => {}} />);
+    view.rerender(<DesignPreviewWorkbench sessionId="s1" initialTarget={{ kind: "localhost", url: "http://localhost:5173/app" }} composer={composer} obscured onClose={() => {}} />);
     await waitFor(() => expect(calls.some((c) => c.cmd === "preview_hide")).toBe(true));
-    view.rerender(<DesignPreviewWorkbench sessionId="s1" initialUrl="http://localhost:5173/app" composer={composer} obscured={false} onClose={() => {}} />);
+    view.rerender(<DesignPreviewWorkbench sessionId="s1" initialTarget={{ kind: "localhost", url: "http://localhost:5173/app" }} composer={composer} obscured={false} onClose={() => {}} />);
     await waitFor(() => expect(calls.some((c) => c.cmd === "preview_show")).toBe(true));
     view.unmount();
     expect(calls.some((c) => c.cmd === "preview_destroy")).toBe(true);
@@ -50,7 +61,7 @@ describe("DesignPreviewWorkbench native lifecycle", () => {
 
   it("does not let the StrictMode cleanup destroy the active preview", async () => {
     deferCreates = true;
-    render(<StrictMode><DesignPreviewWorkbench sessionId="s1" initialUrl="http://localhost:5173/app" composer={composer} obscured={false} onClose={() => {}} /></StrictMode>);
+    render(<StrictMode><DesignPreviewWorkbench sessionId="s1" initialTarget={{ kind: "localhost", url: "http://localhost:5173/app" }} composer={composer} obscured={false} onClose={() => {}} /></StrictMode>);
     await waitFor(() => expect(calls.filter((c) => c.cmd === "preview_create")).toHaveLength(2));
 
     await act(async () => {
@@ -61,6 +72,44 @@ describe("DesignPreviewWorkbench native lifecycle", () => {
     expect(calls.filter((c) => c.cmd === "preview_destroy")).toHaveLength(1);
     expect(calls.at(-1)?.cmd).not.toBe("preview_destroy");
     expect(calls.some((c) => c.cmd === "preview_set_bounds")).toBe(true);
+  });
+
+  it("switches artifact when initialTarget changes in the same session", async () => {
+    const view = render(<DesignPreviewWorkbench sessionId="s1" initialTarget={{ kind: "artifact", path: "pages/first.html", artifactKind: "html" }} composer={composer} obscured={false} onClose={() => {}} />);
+    expect(await screen.findByTitle("Preview pages/first.html")).toBeTruthy();
+    view.rerender(<DesignPreviewWorkbench sessionId="s1" initialTarget={{ kind: "artifact", path: "pages/second.html", artifactKind: "html" }} composer={composer} obscured={false} onClose={() => {}} />);
+    expect(await screen.findByTitle("Preview pages/second.html")).toBeTruthy();
+    expect(calls.some((c) => c.cmd === "session_call" && (c.args?.payload as { path?: string })?.path === "pages/second.html")).toBe(true);
+  });
+
+  it("browses, searches and renders HTML, image and text workspace artifacts", async () => {
+    const createObjectURL = vi.fn(() => "blob:preview-html");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal("URL", { ...URL, createObjectURL, revokeObjectURL });
+    mount();
+
+    const choose = async (query: string, path: string) => {
+      await userEvent.click(screen.getByRole("button", { name: "Choose workspace preview file" }));
+      const search = await screen.findByLabelText("Search preview files");
+      await userEvent.clear(search);
+      await userEvent.type(search, query);
+      await userEvent.click(await screen.findByRole("button", { name: path }));
+    };
+
+    await choose("home", "pages/home.html");
+    const iframe = await screen.findByTitle("Preview pages/home.html");
+    expect(iframe.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(iframe.getAttribute("src")).toBe("blob:preview-html");
+
+    await choose("hero", "images/hero.png");
+    expect((await screen.findByRole("img", { name: "images/hero.png" })).getAttribute("src")).toBe("data:image/png;base64,AQID");
+
+    await choose("readme", "notes/readme.txt");
+    expect(await screen.findByText("preview text content")).toBeTruthy();
+    const readPaths = calls
+      .filter((call) => call.cmd === "session_call" && call.args?.kind === "repo_artifact_read")
+      .map((call) => (call.args?.payload as { path?: string }).path);
+    expect(readPaths).toEqual(["pages/home.html", "images/hero.png", "notes/readme.txt"]);
   });
 
   it("serializes before editing and saves project-relative HTML through the backend", async () => {

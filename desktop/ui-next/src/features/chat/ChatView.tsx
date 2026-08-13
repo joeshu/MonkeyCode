@@ -26,7 +26,7 @@ import {
 import { useApprovalHotkeys } from "@/app/shortcuts";
 import { useI18n } from "@/lib/i18n";
 import { sessionOutline, type OutlineItem } from "@/lib/ipc/controls";
-import { repoChanges, repoReveal } from "@/lib/ipc/repo";
+import { repoChanges, repoPreviewFiles, repoReveal } from "@/lib/ipc/repo";
 import { designTemplatePreviewRead, sessionFrame, sessionPatch, type SessionMeta } from "@/lib/ipc/sessions";
 import { onNativeFileDrop, uploadFileURL } from "@/lib/ipc/uploads";
 import { workspaceRelativePath } from "@/lib/util/markdownPaths";
@@ -41,6 +41,7 @@ import { OutlineNav, outlineEntriesOf } from "./OutlineNav";
 import { TaskPanel } from "./TaskPanel";
 import { FilesDrawer } from "@/features/files/FilesDrawer";
 import { DesignPreviewWorkbench } from "@/features/design/DesignPreviewWorkbench";
+import { hasDesignRelatedChanges, selectTurnPreviewArtifact, targetForFile, touchedTurnChanges, turnWarrantsArtifactPreview, writtenToolPaths, type DesignPreviewTarget } from "@/features/design/previewArtifact";
 import { currentTurnAgentPreviewUrl, newestAgentPreviewUrl, normalizePreviewUrl } from "@/features/design/previewUrl";
 import { useSessionFeed } from "./useSessionFeed";
 
@@ -86,8 +87,18 @@ export function ChatView({
   const composer = useComposer(meta.id, { running: state.running, historyLoaded, lastSeq: state.lastSeq });
   const detectedPreviewUrl = useMemo(() => newestAgentPreviewUrl(state.items), [state.items]);
   const currentTurnPreviewUrl = useMemo(() => currentTurnAgentPreviewUrl(state.items), [state.items]);
-  const [preview, setPreview] = useState<{ sessionId: string; url: string } | null>(null);
-  const previewUrl = preview?.sessionId === meta.id ? preview.url : null;
+  const currentTurnText = useMemo(() => {
+    let user = "";
+    const agents: string[] = [];
+    for (let i = state.items.length - 1; i >= 0; i--) {
+      const item = state.items[i]!;
+      if (item.kind === "user") { user = item.text; break; }
+      if (item.kind === "agent") agents.unshift(item.text);
+    }
+    return { user, agent: agents.join("\n") };
+  }, [state.items]);
+  const [preview, setPreview] = useState<{ sessionId: string; target: DesignPreviewTarget } | null>(null);
+  const previewTarget = preview?.sessionId === meta.id ? preview.target : null;
   // 稳定引用:传给 memo 化 LogList 的回调、拖拽/原生落盘回调都经它取最新
   // ctl,不随 composer 对象每渲染换新
   const composerRef = useRef(composer);
@@ -380,7 +391,7 @@ export function ChatView({
   const openPreviewMarkdownLink = useCallback((raw: string): boolean => {
     const url = normalizePreviewUrl(raw);
     if (!url) return false;
-    setPreview({ sessionId: metaRef.current.id, url });
+    setPreview({ sessionId: metaRef.current.id, target: { kind: "localhost", url } });
     return true;
   }, []);
   const uploadUrl = useCallback((p: string) => uploadFileURL(metaRef.current.id, p), []);
@@ -558,20 +569,66 @@ export function ChatView({
   const [dragging, setDragging] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [changesToken, setChangesToken] = useState(0);
+  const [changesCount, setChangesCount] = useState(0);
   const prevTurnEnded = useRef(false);
+  const changesGeneration = useRef(0);
+  const baselineRunning = useRef(false);
+  const baselineSession = useRef<string | null>(null);
+  const turnBaseline = useRef<{ sessionId: string; value: Promise<Awaited<ReturnType<typeof repoChanges>>> } | null>(null);
+  useEffect(() => {
+    const sessionChanged = baselineSession.current !== meta.id;
+    if (sessionChanged) {
+      baselineSession.current = meta.id;
+      baselineRunning.current = false;
+      prevTurnEnded.current = false;
+      turnBaseline.current = null;
+      changesGeneration.current += 1;
+      // This render still carries useSessionFeed's previous-session state. Its
+      // earlier effect resets that state before the new session replay lands.
+      return;
+    }
+    const rising = state.running && !baselineRunning.current;
+    baselineRunning.current = state.running;
+    if (rising) turnBaseline.current = { sessionId: meta.id, value: repoChanges(meta.id) };
+  }, [meta.id, state.running]);
   useEffect(() => {
     const turnJustEnded = state.turnEnded && !prevTurnEnded.current;
-    if (turnJustEnded) {
-      setChangesToken((n) => n + 1);
-      if (currentTurnPreviewUrl) setPreview({ sessionId: meta.id, url: currentTurnPreviewUrl });
-    }
     prevTurnEnded.current = state.turnEnded;
-  }, [currentTurnPreviewUrl, meta.id, state.turnEnded]);
-  // 改动数徽标:轮末(changesToken 边沿)拉一次计数;浏览器模式 repoChanges
-  // 自身降级空值,失败静默归零(徽标是提示,不是错误面)。徽标 >0 时点
-  // 文件钮直达抽屉「改动」页。
-  const [changesCount, setChangesCount] = useState(0);
+    if (!turnJustEnded) return;
+    setChangesToken((n) => n + 1);
+    const sessionId = meta.id;
+    const generation = ++changesGeneration.current;
+    if (currentTurnPreviewUrl) {
+      setPreview({ sessionId, target: { kind: "localhost", url: currentTurnPreviewUrl } });
+    }
+    void repoChanges(sessionId).then(async (result) => {
+      if (changesGeneration.current !== generation || metaRef.current.id !== sessionId) return;
+      setChangesCount(result.changes.length);
+      if (currentTurnPreviewUrl) return;
+      const baseline = turnBaseline.current?.sessionId === sessionId
+        ? await turnBaseline.current.value.catch(() => ({ changes: result.changes, isGitRepo: result.isGitRepo }))
+        : { changes: result.changes, isGitRepo: result.isGitRepo };
+      if (changesGeneration.current !== generation || metaRef.current.id !== sessionId) return;
+      const lastUser = state.items.findLastIndex((item) => item.kind === "user");
+      const tools = state.items.slice(lastUser + 1).filter((item) => item.kind === "tool");
+      const touched = touchedTurnChanges(baseline.changes, result.changes, writtenToolPaths(tools));
+      let artifact = selectTurnPreviewArtifact(touched, currentTurnText.user, currentTurnText.agent);
+      if (!artifact && hasDesignRelatedChanges(touched) && turnWarrantsArtifactPreview(currentTurnText.user, currentTurnText.agent, touched)) {
+        const files = await repoPreviewFiles(sessionId);
+        if (changesGeneration.current !== generation || metaRef.current.id !== sessionId) return;
+        artifact = selectTurnPreviewArtifact(touched, currentTurnText.user, currentTurnText.agent, files.files);
+      }
+      if (artifact && changesGeneration.current === generation && metaRef.current.id === sessionId) {
+        setPreview({ sessionId, target: targetForFile(artifact) });
+      }
+    }).catch(() => {
+      if (changesGeneration.current === generation && metaRef.current.id === sessionId) setChangesCount(0);
+    });
+  }, [currentTurnPreviewUrl, currentTurnText, meta.id, state.items, state.turnEnded]);
+  // 改动数徽标与自动 artifact 选择共用上面的轮末查询，避免重复读取全工作区。
   useEffect(() => {
+    changesGeneration.current += 1;
+    prevTurnEnded.current = false;
     setChangesCount(0); // 徽标属于会话,切走清零
     // 抽屉同属会话,切走一并收起(旧 UI App.tsx 五条切换路径一律 setDrawer(null))。
     // ChatView 的 key 只取 epoch,切会话走的是**同一实例**,不复位就会:文件树
@@ -584,21 +641,6 @@ export function ChatView({
     // 且可点)、壳意图 open-session(托盘/桌宠)、键盘 Tab 进侧栏行回车。
     setDrawerOpen(false);
   }, [meta.id]);
-  useEffect(() => {
-    if (changesToken === 0) return;
-    let alive = true;
-    repoChanges(meta.id).then(
-      (r) => {
-        if (alive) setChangesCount(r.changes.length);
-      },
-      () => {
-        if (alive) setChangesCount(0);
-      },
-    );
-    return () => {
-      alive = false;
-    };
-  }, [changesToken, meta.id]);
   const dragDepth = useRef(0);
   const onDragEnter = (e: DragEvent<HTMLElement>) => {
     if (![...(e.dataTransfer?.items ?? [])].some((i) => i.kind === "file")) return;
@@ -650,7 +692,7 @@ export function ChatView({
       : null;
 
   return (
-    <div data-design-preview-open={previewUrl ? "true" : undefined} className="flex min-w-0 flex-1 overflow-hidden">
+    <div data-design-preview-open={previewTarget ? "true" : undefined} className="flex min-w-0 flex-1 overflow-hidden">
     <main
       className="relative flex min-w-0 flex-1 flex-col bg-base-100"
       onDragEnter={onDragEnter}
@@ -732,7 +774,7 @@ export function ChatView({
           title={detectedPreviewUrl ?? "No localhost URL in the latest assistant message"}
           className="btn btn-ghost btn-square btn-sm text-base-content/60"
           disabled={!detectedPreviewUrl}
-          onClick={() => detectedPreviewUrl && setPreview({ sessionId: meta.id, url: detectedPreviewUrl })}
+          onClick={() => detectedPreviewUrl && setPreview({ sessionId: meta.id, target: { kind: "localhost", url: detectedPreviewUrl } })}
         >
           <IconBrowser size={16} stroke={1.75} aria-hidden />
         </button>
@@ -932,11 +974,11 @@ export function ChatView({
       )}
       {childId && <ChildSessionModal id={childId} workdir={meta.workdir} onClose={() => setChildId(null)} />}
     </main>
-    {previewUrl && (
+    {previewTarget && (
       <DesignPreviewWorkbench
         key={meta.id}
         sessionId={meta.id}
-        initialUrl={previewUrl}
+        initialTarget={previewTarget}
         composer={composer}
         obscured={drawerOpen || !!childId}
         onClose={() => setPreview(null)}

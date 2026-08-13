@@ -23,6 +23,8 @@ function stubShell({
   outline,
   frames,
   changes,
+  previewFiles,
+  artifacts,
   historyPages,
 }: {
   hasMore?: boolean;
@@ -31,10 +33,13 @@ function stubShell({
   frames?: unknown[];
   /** session_call repo_file_changes 的应答(改动徽标用例) */
   changes?: unknown;
+  previewFiles?: unknown;
+  artifacts?: Record<string, unknown>;
   /** session_history 逐次应答队列(offset 补页用例);耗尽/缺省走单页默认 */
   historyPages?: unknown[];
 } = {}) {
   const ops: Op[] = [];
+  const changeResponses = Array.isArray(changes) ? [...changes] : null;
   const listeners = new Map<string, (e: { payload: unknown }) => void>();
   (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
     core: {
@@ -42,7 +47,14 @@ function stubShell({
         ops.push({ op: "invoke", cmd, args });
         if (cmd === "session_outline") return Promise.resolve(outline ?? null);
         if (cmd === "session_call" && args?.kind === "repo_file_changes") {
-          return Promise.resolve(changes ?? { result: [], is_git_repo: true });
+          return Promise.resolve(changeResponses?.shift() ?? changes ?? { result: [], is_git_repo: true });
+        }
+        if (cmd === "session_call" && args?.kind === "repo_preview_files") {
+          return Promise.resolve(previewFiles ?? { result: { files: [], truncated: false } });
+        }
+        if (cmd === "session_call" && args?.kind === "repo_artifact_read") {
+          const path = (args.payload as { path?: string } | undefined)?.path ?? "";
+          return Promise.resolve({ result: artifacts?.[path] ?? { path, kind: "html", mime: "text/html", content: "<html></html>" } });
         }
         if (cmd === "session_call") return Promise.resolve({ result: [] });
         if (cmd === "session_open") {
@@ -118,6 +130,25 @@ describe("聊天视图", () => {
     await waitFor(() => expect(screen.getByText(/再跑测试/)).toBeTruthy());
   });
 
+  it("running 会话切换到另一个 running 会话时重新建立 artifact baseline", async () => {
+    const shell = stubShell({
+      frames: [
+        { type: "user-input", data: { content: b64encode("设计页面") }, seq: 1 },
+        { type: "task-started", seq: 2 },
+      ],
+    });
+    const view = render(<ChatView meta={META} />);
+    await waitFor(() => expect(shell.ops.filter((op) => op.args?.kind === "repo_file_changes")).toHaveLength(1));
+    expect(shell.ops.find((op) => op.args?.kind === "repo_file_changes")?.args?.id).toBe("s1");
+
+    const nextMeta = { ...META, id: "s2", title: "另一个运行会话" };
+    view.rerender(<ChatView meta={nextMeta} />);
+    await waitFor(() => expect(shell.ops.filter((op) => op.args?.kind === "repo_file_changes")).toHaveLength(2));
+    const baselineCalls = shell.ops.filter((op) => op.args?.kind === "repo_file_changes");
+    expect(baselineCalls.map((op) => op.args?.id)).toEqual(["s1", "s2"]);
+    expect(shell.ops.some((op) => op.op === "listen" && op.cmd === "frames:s2")).toBe(true);
+  });
+
   it("当前轮设计完成后自动打开预览并标记压缩布局", async () => {
     const { emit } = stubShell();
     const { container } = render(<ChatView meta={META} />);
@@ -139,6 +170,60 @@ describe("聊天视图", () => {
     emit("frames:s1", [{ type: "task-ended", timestamp: 6, seq: 6 }]);
     await waitFor(() => expect(container.querySelector('[data-design-preview-open="true"]')).toBeTruthy());
     expect(screen.getByLabelText("Design preview workbench")).toBeTruthy();
+  });
+
+  it("无 localhost URL 的设计轮结束后自动打开最佳 HTML artifact，普通代码轮不弹", async () => {
+    const shell = stubShell({
+      changes: [
+        { result: [{ path: "legacy.html", status: "M" }], is_git_repo: true },
+        { result: [{ path: "legacy.html", status: "M" }, { path: "src/Login.tsx", status: "M" }], is_git_repo: true },
+      ],
+      previewFiles: { result: { files: [{ path: "index.html", kind: "html", mime: "text/html", size: 20 }], truncated: false } },
+    });
+    const view = render(<ChatView meta={META} />);
+    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
+    shell.emit("frames:s1", [
+      { type: "user-input", data: { content: b64encode("设计一个登录页面") }, seq: 3 },
+      { type: "task-started", seq: 4 },
+    ]);
+    await waitFor(() => expect(shell.ops.filter((op) => op.args?.kind === "repo_file_changes")).toHaveLength(1));
+    shell.emit("frames:s1", [
+      { type: "task-running", kind: "acp_event", data: { update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "页面已经完成" } } }, seq: 5 },
+      { type: "task-ended", seq: 6 },
+    ]);
+    expect(await screen.findByTitle("Preview index.html")).toBeTruthy();
+    expect(screen.queryByTitle("Preview legacy.html")).toBeNull();
+    view.unmount();
+
+    const ordinary = stubShell({ changes: { result: [{ path: "server/api.rs", status: "M" }], is_git_repo: true } });
+    const plain = render(<ChatView meta={META} />);
+    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
+    ordinary.emit("frames:s1", [
+      { type: "user-input", data: { content: b64encode("修复 API 超时") }, seq: 7 },
+      { type: "task-started", seq: 8 },
+      { type: "task-running", kind: "acp_event", data: { update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "后端测试通过" } } }, seq: 9 },
+      { type: "task-ended", seq: 10 },
+    ]);
+    await waitFor(() => expect(ordinary.ops.some((op) => op.args?.kind === "repo_file_changes")).toBe(true));
+    expect(plain.queryByLabelText("Design preview workbench")).toBeNull();
+  });
+
+  it("本轮写工具可选中 baseline 已 dirty 的 HTML，而不选其他遗留 HTML", async () => {
+    const dirty = { result: [{ path: "legacy.html", status: "M" }, { path: "pages/login.html", status: "M" }], is_git_repo: true };
+    const shell = stubShell({ changes: [dirty, dirty] });
+    render(<ChatView meta={META} />);
+    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
+    shell.emit("frames:s1", [
+      { type: "user-input", data: { content: b64encode("设计登录页面") }, seq: 11 },
+      { type: "task-started", seq: 12 },
+    ]);
+    await waitFor(() => expect(shell.ops.filter((op) => op.args?.kind === "repo_file_changes")).toHaveLength(1));
+    shell.emit("frames:s1", [
+      { type: "task-running", kind: "acp_event", data: { update: { sessionUpdate: "tool_call", toolCallId: "w1", title: "Write page", kind: "write", rawInput: { file_path: "/p/a/pages/login.html" } } }, seq: 13 },
+      { type: "task-ended", seq: 14 },
+    ]);
+    expect(await screen.findByTitle("Preview pages/login.html")).toBeTruthy();
+    expect(screen.queryByTitle("Preview legacy.html")).toBeNull();
   });
 
   it("加载更早:前插历史且 cursor 前移,原条目仍在", async () => {
