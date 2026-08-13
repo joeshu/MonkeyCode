@@ -7,6 +7,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 
 import type { ComposerCtl } from "@/features/chat/composer/useComposer";
 import { CodeView } from "@/features/files/CodeView";
+import { useI18n, type MessageKey } from "@/lib/i18n";
 import { repoArtifactRead, repoPreviewFiles, type RepoArtifact, type RepoPreviewFile } from "@/lib/ipc/repo";
 import { rankPreviewFiles, targetForFile, type DesignPreviewTarget } from "./previewArtifact";
 import {
@@ -95,6 +96,7 @@ export function DesignPreviewWorkbench({
   obscured: boolean;
   onClose(): void;
 }) {
+  const { t } = useI18n();
   const initialUrl = initialTarget.kind === "localhost" ? initialTarget.url : "";
   const paneRef = useRef<HTMLElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
@@ -361,11 +363,11 @@ export function DesignPreviewWorkbench({
   };
 
   return (
-    <aside ref={paneRef} aria-label="Design preview workbench" style={{ width: paneWidth }} className="relative flex min-w-80 shrink-0 flex-col border-s border-base-300 bg-base-100">
+    <aside ref={paneRef} aria-label={t("design.preview.workbench")} style={{ width: paneWidth }} className="relative flex min-w-80 shrink-0 flex-col border-s border-base-300 bg-base-100">
       <div
         role="separator"
         aria-orientation="vertical"
-        aria-label="Resize design preview"
+        aria-label={t("design.preview.resize")}
         className="absolute inset-y-0 -start-1 z-30 w-2 cursor-col-resize"
         onPointerDown={(e) => {
           e.currentTarget.setPointerCapture(e.pointerId);
@@ -376,37 +378,38 @@ export function DesignPreviewWorkbench({
         }}
       />
       <div className="relative flex h-10 shrink-0 items-center gap-1 border-b border-base-300 px-2">
-        <button aria-label="Choose workspace preview file" className="btn btn-ghost btn-square btn-xs" onClick={() => { const open = !filesOpen; setFilesOpen(open); if (open && previewFiles === null) void loadFiles(); }}><IconFolder size={14} /></button>
+        <button aria-label={t("design.preview.chooseFile")} className="btn btn-ghost btn-square btn-xs" onClick={() => { const open = !filesOpen; setFilesOpen(open); if (open && previewFiles === null) void loadFiles(); }}><IconFolder size={14} /></button>
         {target.kind === "localhost" ? <>
           <IconBrowser size={15} stroke={1.75} className="shrink-0 text-base-content/50" aria-hidden />
-          <input aria-label="Preview address" className="input input-xs min-w-24 flex-1 font-mono" value={address} onChange={(e) => setAddress(e.target.value)} onKeyDown={(e) => e.key === "Enter" && navigate()} />
-          <button className="btn btn-ghost btn-square btn-xs" title="Navigate" onClick={navigate}>→</button>
-          <button className="btn btn-ghost btn-square btn-xs" title="Reload" onClick={() => void previewReload().catch(report)}><IconRefresh size={14} stroke={1.75} /></button>
+          <input aria-label={t("design.preview.address")} className="input input-xs min-w-24 flex-1 font-mono" value={address} onChange={(e) => setAddress(e.target.value)} onKeyDown={(e) => e.key === "Enter" && navigate()} />
+          <button className="btn btn-ghost btn-square btn-xs" title={t("design.preview.navigate")} onClick={navigate}>→</button>
+          <button className="btn btn-ghost btn-square btn-xs" title={t("design.preview.reload")} onClick={() => void previewReload().catch(report)}><IconRefresh size={14} stroke={1.75} /></button>
         </> : <>
           <span className="min-w-0 flex-1 truncate font-mono text-xs" title={target.kind === "artifact" ? target.path : ""}>{target.kind === "artifact" ? target.path : ""}</span>
-          {target.kind === "artifact" && target.artifactKind === "html" && <button className="btn btn-ghost btn-square btn-xs" title="Reload" onClick={() => void previewReload().catch(report)}><IconRefresh size={14} stroke={1.75} /></button>}
+          {target.kind === "artifact" && target.artifactKind === "html" && <button className="btn btn-ghost btn-square btn-xs" title={t("design.preview.reload")} onClick={() => void previewReload().catch(report)}><IconRefresh size={14} stroke={1.75} /></button>}
         </>}
-        <button className="btn btn-ghost btn-square btn-xs" title="Close preview" onClick={onClose}><IconX size={14} stroke={1.75} /></button>
+        <button className="btn btn-ghost btn-square btn-xs" title={t("design.preview.close")} onClick={onClose}><IconX size={14} stroke={1.75} /></button>
         {filesOpen && <div className="absolute inset-x-2 top-10 z-40 max-h-72 overflow-auto rounded-box border border-base-300 bg-base-100 p-2 shadow-lg">
-          <div className="flex gap-1"><input autoFocus aria-label="Search preview files" className="input input-xs min-w-0 flex-1" placeholder="Search workspace files" value={fileQuery} onChange={(e) => setFileQuery(e.target.value)} /><button className="btn btn-ghost btn-xs" disabled={filesLoading} onClick={() => void loadFiles()}><IconRefresh size={13} /> Refresh</button></div>
-          {filesTruncated && <p className="py-1 text-xs text-warning">Results truncated</p>}
+          <div className="flex gap-1"><input autoFocus aria-label={t("design.preview.searchFiles")} className="input input-xs min-w-0 flex-1" placeholder={t("design.preview.searchPlaceholder")} value={fileQuery} onChange={(e) => setFileQuery(e.target.value)} /><button className="btn btn-ghost btn-xs" disabled={filesLoading} onClick={() => void loadFiles()}><IconRefresh size={13} /> {t("design.preview.refresh")}</button></div>
+          {filesTruncated && <p className="py-1 text-xs text-warning">{t("design.preview.truncated")}</p>}
           <div className="mt-1 flex flex-col">{visibleFiles.map((file) => <button key={file.path} className="btn btn-ghost btn-sm h-auto min-h-8 justify-start font-mono text-xs" title={file.path} onClick={() => { setTarget(targetForFile(file)); setFilesOpen(false); }}>{file.path}</button>)}</div>
-          {!filesLoading && visibleFiles.length === 0 && <p className="p-2 text-xs text-base-content/60">No previewable files</p>}
+          {!filesLoading && visibleFiles.length === 0 && <p className="p-2 text-xs text-base-content/60">{t("design.preview.empty")}</p>}
         </div>}
       </div>
       {native && <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-1 border-b border-base-300 px-2 py-1">
         {Object.entries(PRESETS).map(([name]) => {
           const Icon = name === "desktop" ? IconDeviceDesktop : name === "tablet" ? IconDeviceTablet : IconDeviceMobile;
-          return <button key={name} className={`btn btn-square btn-xs ${preset === name ? "btn-active" : "btn-ghost"}`} title={name} onClick={() => setPreset(name as keyof typeof PRESETS)}><Icon size={14} stroke={1.75} /></button>;
+          const label = t(`design.preview.device.${name}` as MessageKey);
+          return <button key={name} className={`btn btn-square btn-xs ${preset === name ? "btn-active" : "btn-ghost"}`} title={label} aria-label={label} onClick={() => setPreset(name as keyof typeof PRESETS)}><Icon size={14} stroke={1.75} /></button>;
         })}
         <div role="tablist" className="tabs tabs-box tabs-xs ms-1">
-          <button role="tab" className={`tab ${tab === "preview" ? "tab-active" : ""}`} onClick={() => { setTab("preview"); requestAnimationFrame(() => void previewShow().then(bounds).catch(report)); }}>Preview</button>
-          <button role="tab" className={`tab ${tab === "code" ? "tab-active" : ""}`} onClick={() => void serialize()}><IconCode size={12} stroke={1.75} /> Code</button>
+          <button role="tab" className={`tab ${tab === "preview" ? "tab-active" : ""}`} onClick={() => { setTab("preview"); requestAnimationFrame(() => void previewShow().then(bounds).catch(report)); }}>{t("design.preview.tab.preview")}</button>
+          <button role="tab" className={`tab ${tab === "code" ? "tab-active" : ""}`} onClick={() => void serialize()}><IconCode size={12} stroke={1.75} /> {t("design.preview.tab.code")}</button>
         </div>
-        <button className={`btn btn-xs ms-auto ${picker ? "btn-primary" : "btn-ghost"}`} onClick={() => { const next = !picker; setPicker(next); void previewPickerToggle(next).catch(report); }}><IconPointer size={13} stroke={1.75} /> Pick</button>
-        <button className="btn btn-ghost btn-xs" onClick={() => void startCapture("viewport")}><IconCamera size={13} stroke={1.75} /> Capture</button>
-        <button className="btn btn-ghost btn-xs" onClick={() => void startCapture("full")}>Full</button>
-        <select aria-label="Zoom" className="select select-xs w-20" value={zoom} onChange={(e) => { const n = Math.min(500, Math.max(10, Number(e.target.value))); setZoom(n); void previewSetZoom(n / 100).catch(report); }}>
+        <button className={`btn btn-xs ms-auto ${picker ? "btn-primary" : "btn-ghost"}`} onClick={() => { const next = !picker; setPicker(next); void previewPickerToggle(next).catch(report); }}><IconPointer size={13} stroke={1.75} /> {t("design.preview.pick")}</button>
+        <button className="btn btn-ghost btn-xs" onClick={() => void startCapture("viewport")}><IconCamera size={13} stroke={1.75} /> {t("design.preview.capture")}</button>
+        <button className="btn btn-ghost btn-xs" onClick={() => void startCapture("full")}>{t("design.preview.full")}</button>
+        <select aria-label={t("design.preview.zoom")} className="select select-xs w-20" value={zoom} onChange={(e) => { const n = Math.min(500, Math.max(10, Number(e.target.value))); setZoom(n); void previewSetZoom(n / 100).catch(report); }}>
           {[10, 25, 50, 75, 100, 125, 150, 200, 300, 400, 500].map((n) => <option key={n} value={n}>{n}%</option>)}
         </select>
       </div>}

@@ -3,6 +3,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ComposerCtl } from "@/features/chat/composer/useComposer";
+import { setLocale } from "@/lib/i18n";
 import { DesignPreviewWorkbench } from "./DesignPreviewWorkbench";
 
 type EventCb = (event: { payload: unknown }) => void;
@@ -12,6 +13,7 @@ let pendingCreates: (() => void)[];
 let deferCreates: boolean;
 
 beforeEach(() => {
+  setLocale("en");
   calls = []; events = new Map(); pendingCreates = []; deferCreates = false;
   vi.mocked(composer.sendWithFiles).mockReset().mockResolvedValue(true);
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ x: 400, y: 80, left: 400, top: 80, right: 1000, bottom: 480, width: 600, height: 400, toJSON() {} });
@@ -47,6 +49,22 @@ function mount(obscured = false) {
 }
 
 describe("DesignPreviewWorkbench native lifecycle", () => {
+  it("follows the configured locale for toolbar labels", async () => {
+    setLocale("zh-CN");
+    mount();
+
+    expect(screen.getByRole("tab", { name: "预览" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: /代码/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /选择元素/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /截图/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "整页" })).toBeTruthy();
+    expect(screen.getByLabelText("缩放")).toBeTruthy();
+
+    act(() => setLocale("en"));
+    expect(await screen.findByRole("tab", { name: "Preview" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Capture/ })).toBeTruthy();
+  });
+
   it("creates with measured bounds, hides under an obscurer, restores and destroys", async () => {
     const view = mount();
     await waitFor(() => expect(calls.some((c) => c.cmd === "preview_create")).toBe(true));
