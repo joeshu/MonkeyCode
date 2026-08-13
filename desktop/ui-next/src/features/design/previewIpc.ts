@@ -19,6 +19,7 @@ export interface SerializeResult { requestId: string; html: string }
 export type ResultAction = "download" | "send" | "close";
 
 export const previewCreate = (url: string, bounds: PreviewBounds) => invoke<void>("preview_create", { url, bounds });
+export const previewCreateArtifact = (id: string, path: string, bounds: PreviewBounds) => invoke<void>("preview_create_artifact", { id, path, bounds });
 export const previewShow = () => invoke<void>("preview_show");
 export const previewHide = () => invoke<void>("preview_hide");
 export const previewSetBounds = (bounds: PreviewBounds) => invoke<void>("preview_set_bounds", { bounds });

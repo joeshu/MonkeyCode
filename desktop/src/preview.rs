@@ -412,20 +412,46 @@ S.apply=(edit)=>{const el=document.querySelector(edit.selector);if(!el)throw Err
 S.undoOne=()=>{const x=S.undo.pop();if(!x)return false;if(x.prop==='delete'){x.parent.insertBefore(x.el,x.next);return true}if(x.prop==='text')x.el.textContent=x.before;else x.el.style[x.prop]=x.before;return true}
 })()"#;
 
-#[tauri::command]
-pub fn preview_create(app: AppHandle, url: String, bounds: PreviewBounds) -> Result<(), String> {
-    let url = preview_url(&url)?;
+fn artifact_preview_file(workdir: &Path, relative: &str) -> Result<(Url, PathBuf), String> {
+    let relative = Path::new(relative);
+    if relative.as_os_str().is_empty()
+        || relative.is_absolute()
+        || relative
+            .components()
+            .any(|part| !matches!(part, Component::Normal(_)))
+    {
+        return Err("预览文件路径无效".into());
+    }
+    if relative.extension().and_then(|ext| ext.to_str()) != Some("html") {
+        return Err("只能预览 HTML 文件".into());
+    }
+    let root = workdir
+        .canonicalize()
+        .map_err(|e| format!("工作目录不可用: {e}"))?;
+    let file = root
+        .join(relative)
+        .canonicalize()
+        .map_err(|e| format!("预览文件不可用: {e}"))?;
+    if !file.starts_with(&root) || !file.is_file() {
+        return Err("预览文件不在工作目录内".into());
+    }
+    let url = Url::from_file_path(&file).map_err(|_| "无法创建预览地址".to_string())?;
+    Ok((url, root))
+}
+
+fn create_preview(
+    app: AppHandle,
+    url: Url,
+    bounds: PreviewBounds,
+    artifact_root: Option<PathBuf>,
+) -> Result<(), String> {
     let bounds = bounds.validate()?;
     if let Some(v) = app.get_webview(LABEL) {
-        v.set_position(LogicalPosition::new(bounds.x, bounds.y))
-            .map_err(|e| e.to_string())?;
-        v.set_size(LogicalSize::new(bounds.width, bounds.height))
-            .map_err(|e| e.to_string())?;
-        v.show().map_err(|e| e.to_string())?;
-        return Ok(());
+        v.close().map_err(|e| e.to_string())?;
     }
     let window = app.get_window("main").ok_or("主窗口不存在")?;
     let callback_app = app.clone();
+    let navigation_root = artifact_root.clone();
     let view = window
         .add_child(
             WebviewBuilder::new(LABEL, WebviewUrl::External(url))
@@ -434,7 +460,6 @@ pub fn preview_create(app: AppHandle, url: String, bounds: PreviewBounds) -> Res
                         let _ = callback_app.emit_to("main", "preview-result-action", action);
                         false
                     } else if url.scheme() == PREVIEW_RESULT_SCHEME {
-                        // Never let malformed or unknown result actions navigate the preview.
                         false
                     } else if let Some(result) = serialize_result(url) {
                         match result { Ok(Some((request_id, html))) => { let _=callback_app.emit_to("main","preview-serialized",serde_json::json!({"requestId":request_id,"html":html})); }, Ok(None)=>{}, Err(error)=>{let _=callback_app.emit_to("main","preview-serialized-error",serde_json::json!({"requestId":url.host_str().unwrap_or(""),"error":error}));} }
@@ -443,28 +468,23 @@ pub fn preview_create(app: AppHandle, url: String, bounds: PreviewBounds) -> Res
                         match result {
                             Ok(Some((request_id, data_url))) => {
                                 let clipboard_error = copy_capture_to_clipboard(&data_url).err();
-                                let _ = callback_app.emit_to(
-                                    "main",
-                                    "preview-captured",
-                                    serde_json::json!({"requestId":request_id,"dataUrl":data_url,"clipboardError":clipboard_error}),
-                                );
+                                let _ = callback_app.emit_to("main", "preview-captured", serde_json::json!({"requestId":request_id,"dataUrl":data_url,"clipboardError":clipboard_error}));
                             }
                             Ok(None) => {}
-                            Err(error) => {
-                                let _ = callback_app.emit_to("main", "preview-capture-error", serde_json::json!({"requestId":url.host_str().unwrap_or(""),"error":error}));
-                            }
+                            Err(error) => { let _ = callback_app.emit_to("main", "preview-capture-error", serde_json::json!({"requestId":url.host_str().unwrap_or(""),"error":error})); }
                         }
                         false
                     } else if let Some(result) = picker_result(url) {
                         match result {
-                            Ok(snapshot) => {
-                                let _ = callback_app.emit_to("main", "preview-element-picked", snapshot);
-                            }
-                            Err(error) => {
-                                let _ = callback_app.emit_to("main", "preview-picker-error", error);
-                            }
+                            Ok(snapshot) => { let _ = callback_app.emit_to("main", "preview-element-picked", snapshot); }
+                            Err(error) => { let _ = callback_app.emit_to("main", "preview-picker-error", error); }
                         }
                         false
+                    } else if let Some(root) = &navigation_root {
+                        url.to_file_path()
+                            .ok()
+                            .and_then(|path| path.canonicalize().ok())
+                            .is_some_and(|path| path.starts_with(root))
                     } else {
                         is_preview_url(url)
                     }
@@ -483,6 +503,29 @@ pub fn preview_create(app: AppHandle, url: String, bounds: PreviewBounds) -> Res
     view.eval(CAPTURE_JS)
         .map_err(|e| format!("初始化截图器失败: {e}"))?;
     Ok(())
+}
+
+#[tauri::command]
+pub fn preview_create(app: AppHandle, url: String, bounds: PreviewBounds) -> Result<(), String> {
+    create_preview(app, preview_url(&url)?, bounds, None)
+}
+
+#[tauri::command]
+pub async fn preview_create_artifact(
+    app: AppHandle,
+    host: State<'_, DriverHost>,
+    id: String,
+    path: String,
+    bounds: PreviewBounds,
+) -> Result<(), String> {
+    let engine = host.get()?;
+    let workdir = engine.session_workdir(&id).await?;
+    let fs_root = match engine.wsl_distro() {
+        Some(distro) => crate::wsl::host_fs_view(&distro, &workdir),
+        None => PathBuf::from(workdir),
+    };
+    let (url, root) = artifact_preview_file(&fs_root, &path)?;
+    create_preview(app, url, bounds, Some(root))
 }
 #[tauri::command]
 pub fn preview_show(app: AppHandle) -> Result<(), String> {
@@ -988,6 +1031,23 @@ mod tests {
         ] {
             assert_eq!(preview_result_action(&Url::parse(raw).unwrap()), None);
         }
+    }
+    #[test]
+    fn artifact_preview_rejects_unsafe_paths() {
+        let root =
+            std::env::temp_dir().join(format!("monkeycode-preview-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("index.html"), "<html></html>").unwrap();
+        std::fs::write(root.join("index.txt"), "text").unwrap();
+        let (url, canonical_root) = artifact_preview_file(&root, "index.html").unwrap();
+        assert_eq!(url.scheme(), "file");
+        assert_eq!(canonical_root, root.canonicalize().unwrap());
+        assert!(artifact_preview_file(&root, "../index.html").is_err());
+        assert!(artifact_preview_file(&root, "index.txt").is_err());
+        assert!(artifact_preview_file(&root, "/tmp/index.html").is_err());
+        assert!(artifact_preview_file(&root, "missing.html").is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn html_target_rejects_unsafe_paths() {

@@ -10,8 +10,8 @@ import { CodeView } from "@/features/files/CodeView";
 import { repoArtifactRead, repoPreviewFiles, type RepoArtifact, type RepoPreviewFile } from "@/lib/ipc/repo";
 import { rankPreviewFiles, targetForFile, type DesignPreviewTarget } from "./previewArtifact";
 import {
-  onPreviewElementPicked, onPreviewPickerError, onPreviewResultAction, previewCreate, previewDestroy,
-  previewElementApply, previewElementUndo, previewHide, previewNavigate, previewPickerToggle,
+  onPreviewElementPicked, onPreviewPickerError, onPreviewResultAction, previewCreate, previewCreateArtifact,
+  previewDestroy, previewElementApply, previewElementUndo, previewHide, previewNavigate, previewPickerToggle,
   previewReload, previewResultHide, previewResultShow, previewSaveHtml, previewSetBounds,
   previewSetZoom, previewShow, requestCapture, requestSerialization, type ElementSnapshot,
 } from "./previewIpc";
@@ -100,6 +100,7 @@ export function DesignPreviewWorkbench({
   const hostRef = useRef<HTMLDivElement>(null);
   const liveRef = useRef(0);
   const createdRef = useRef(false);
+  const artifactCreateQueueRef = useRef(Promise.resolve());
   const [paneWidth, setPaneWidth] = useState<number | string>("65%");
   const [target, setTarget] = useState<DesignPreviewTarget>(initialTarget);
   const latestRef = useRef({ sessionId, initialUrl, targetKind: target.kind });
@@ -136,8 +137,9 @@ export function DesignPreviewWorkbench({
     setFilesOpen(false);
   }, [initialTarget]);
 
-  const native = target.kind === "localhost";
-  const hidden = !native || obscured || tab === "code" || !!capture || !!picked;
+  const native = target.kind === "localhost" || (target.kind === "artifact" && target.artifactKind === "html");
+  const previewSourceKey = target.kind === "localhost" ? "localhost" : target.kind === "artifact" && target.artifactKind === "html" ? `artifact:${target.path}` : "none";
+  const hidden = !native || obscured || tab === "code" || filesOpen || !!capture || !!picked;
   const visibleFiles = useMemo(() => rankPreviewFiles(previewFiles ?? [], fileQuery), [previewFiles, fileQuery]);
   const loadFiles = useCallback(async () => {
     setFilesLoading(true);
@@ -187,8 +189,9 @@ export function DesignPreviewWorkbench({
 
   useLayoutEffect(() => {
     const generation = ++liveRef.current;
+    const artifactPath = target.kind === "artifact" && target.artifactKind === "html" ? target.path : null;
     const url = target.kind === "localhost" ? normalizePreviewUrl(target.url) : null;
-    if (!url) {
+    if (!url && !artifactPath) {
       createdRef.current = false;
       void previewDestroy().catch(() => {});
       return;
@@ -196,13 +199,17 @@ export function DesignPreviewWorkbench({
     let starting = false;
     const sync = () => {
       const host = hostRef.current;
-      if (!host || !url) return;
+      if (!host || (!url && !artifactPath)) return;
       const r = host.getBoundingClientRect();
       if (r.width < 1 || r.height < 1) return;
       if (createdRef.current) { bounds(); return; }
       if (starting) return;
       starting = true;
-      void previewCreate(url, { x: r.left, y: r.top, width: r.width, height: r.height }).then(() => {
+      const create = artifactPath
+        ? artifactCreateQueueRef.current.then(() => previewCreateArtifact(sessionId, artifactPath, { x: r.left, y: r.top, width: r.width, height: r.height }))
+        : previewCreate(url!, { x: r.left, y: r.top, width: r.width, height: r.height });
+      if (artifactPath) artifactCreateQueueRef.current = create.catch(() => {});
+      void create.then(() => {
         starting = false;
         if (liveRef.current !== generation) {
           if (latestRef.current.targetKind !== "localhost") void previewDestroy().catch(() => {});
@@ -225,16 +232,17 @@ export function DesignPreviewWorkbench({
     };
     // URL changes navigate through the dedicated effect below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, target.kind]);
+  }, [sessionId, previewSourceKey]);
 
   useLayoutEffect(() => {
     if (tab !== "preview" || !hostRef.current) return;
     bounds();
-    if (typeof ResizeObserver === "undefined") return;
+    const frame = requestAnimationFrame(bounds);
+    if (typeof ResizeObserver === "undefined") return () => cancelAnimationFrame(frame);
     const ro = new ResizeObserver(bounds);
     ro.observe(hostRef.current);
-    return () => ro.disconnect();
-  }, [tab, bounds]);
+    return () => { cancelAnimationFrame(frame); ro.disconnect(); };
+  }, [tab, preset, bounds]);
 
   useEffect(() => {
     if (target.kind !== "localhost") return;
@@ -245,7 +253,7 @@ export function DesignPreviewWorkbench({
   }, [target, report]);
 
   useEffect(() => {
-    if (target.kind !== "artifact") { setArtifact(null); return; }
+    if (target.kind !== "artifact" || target.artifactKind === "html") { setArtifact(null); return; }
     let active = true;
     setStatus("Loading artifact…");
     void repoArtifactRead(sessionId, target.path).then((value) => {
@@ -365,12 +373,15 @@ export function DesignPreviewWorkbench({
       />
       <div className="relative flex h-10 shrink-0 items-center gap-1 border-b border-base-300 px-2">
         <button aria-label="Choose workspace preview file" className="btn btn-ghost btn-square btn-xs" onClick={() => { const open = !filesOpen; setFilesOpen(open); if (open && previewFiles === null) void loadFiles(); }}><IconFolder size={14} /></button>
-        {native ? <>
+        {target.kind === "localhost" ? <>
           <IconBrowser size={15} stroke={1.75} className="shrink-0 text-base-content/50" aria-hidden />
           <input aria-label="Preview address" className="input input-xs min-w-24 flex-1 font-mono" value={address} onChange={(e) => setAddress(e.target.value)} onKeyDown={(e) => e.key === "Enter" && navigate()} />
           <button className="btn btn-ghost btn-square btn-xs" title="Navigate" onClick={navigate}>→</button>
           <button className="btn btn-ghost btn-square btn-xs" title="Reload" onClick={() => void previewReload().catch(report)}><IconRefresh size={14} stroke={1.75} /></button>
-        </> : <span className="min-w-0 flex-1 truncate font-mono text-xs" title={target.kind === "artifact" ? target.path : ""}>{target.kind === "artifact" ? target.path : ""}</span>}
+        </> : <>
+          <span className="min-w-0 flex-1 truncate font-mono text-xs" title={target.kind === "artifact" ? target.path : ""}>{target.kind === "artifact" ? target.path : ""}</span>
+          {target.kind === "artifact" && target.artifactKind === "html" && <button className="btn btn-ghost btn-square btn-xs" title="Reload" onClick={() => void previewReload().catch(report)}><IconRefresh size={14} stroke={1.75} /></button>}
+        </>}
         <button className="btn btn-ghost btn-square btn-xs" title="Close preview" onClick={onClose}><IconX size={14} stroke={1.75} /></button>
         {filesOpen && <div className="absolute inset-x-2 top-10 z-40 max-h-72 overflow-auto rounded-box border border-base-300 bg-base-100 p-2 shadow-lg">
           <div className="flex gap-1"><input autoFocus aria-label="Search preview files" className="input input-xs min-w-0 flex-1" placeholder="Search workspace files" value={fileQuery} onChange={(e) => setFileQuery(e.target.value)} /><button className="btn btn-ghost btn-xs" disabled={filesLoading} onClick={() => void loadFiles()}><IconRefresh size={13} /> Refresh</button></div>
@@ -397,9 +408,8 @@ export function DesignPreviewWorkbench({
       </div>}
       {status && <div role="status" className="shrink-0 border-b border-base-300 px-3 py-1 text-xs text-base-content/60">{status}</div>}
       <div className="relative min-h-0 flex-1 overflow-hidden bg-base-200">
-        {!native ? (
-          artifact?.kind === "html" ? <iframe title={`Preview ${artifact.path}`} srcDoc={artifact.content} sandbox="allow-scripts" className="size-full border-0 bg-white" />
-          : artifact?.kind === "image" ? <div className="flex size-full items-center justify-center overflow-auto p-2"><img src={artifact.dataUrl} alt={artifact.path} className="max-h-full max-w-full" /></div>
+        {target.kind === "artifact" && target.artifactKind !== "html" ? (
+          artifact?.kind === "image" ? <div className="flex size-full items-center justify-center overflow-auto p-2"><img src={artifact.dataUrl} alt={artifact.path} className="max-h-full max-w-full" /></div>
           : artifact?.kind === "text" ? <div className="size-full overflow-auto"><CodeView path={artifact.path} text={artifact.content} /></div>
           : null
         ) : tab === "preview" ? (

@@ -19,7 +19,7 @@ beforeEach(() => {
   (window as unknown as { __TAURI__: unknown }).__TAURI__ = {
     core: { invoke: async (cmd: string, args?: Record<string, unknown>) => {
       calls.push({ cmd, args });
-      if (cmd === "preview_create" && deferCreates) await new Promise<void>((resolve) => pendingCreates.push(resolve));
+      if ((cmd === "preview_create" || cmd === "preview_create_artifact") && deferCreates) await new Promise<void>((resolve) => pendingCreates.push(resolve));
       if (cmd === "preview_serialize") queueMicrotask(() => events.get("preview-serialized")?.({ payload: { requestId: args?.requestId, html: "<html>serialized</html>" } }));
       if (cmd === "preview_capture") queueMicrotask(() => events.get("preview-captured")?.({ payload: { requestId: args?.requestId, dataUrl: "data:image/png;base64,AQID" } }));
       if (cmd === "session_call" && args?.kind === "repo_artifact_read") {
@@ -59,6 +59,17 @@ describe("DesignPreviewWorkbench native lifecycle", () => {
     expect(calls.some((c) => c.cmd === "preview_destroy")).toBe(true);
   });
 
+  it("hides the native preview while the workspace file menu is open", async () => {
+    mount();
+    await waitFor(() => expect(calls.some((c) => c.cmd === "preview_create")).toBe(true));
+
+    await userEvent.click(screen.getByRole("button", { name: "Choose workspace preview file" }));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "preview_hide")).toBe(true));
+
+    await userEvent.click(screen.getByRole("button", { name: "Choose workspace preview file" }));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "preview_show")).toBe(true));
+  });
+
   it("does not let the StrictMode cleanup destroy the active preview", async () => {
     deferCreates = true;
     render(<StrictMode><DesignPreviewWorkbench sessionId="s1" initialTarget={{ kind: "localhost", url: "http://localhost:5173/app" }} composer={composer} obscured={false} onClose={() => {}} /></StrictMode>);
@@ -74,40 +85,50 @@ describe("DesignPreviewWorkbench native lifecycle", () => {
     expect(calls.some((c) => c.cmd === "preview_set_bounds")).toBe(true);
   });
 
-  it("destroys a native preview that finishes creating after switching to an artifact", async () => {
-    deferCreates = true;
+  it("switches from localhost to the native artifact preview", async () => {
     mount();
-    await waitFor(() => expect(pendingCreates).toHaveLength(1));
+    await waitFor(() => expect(calls.some((call) => call.cmd === "preview_create")).toBe(true));
 
     await userEvent.click(screen.getByRole("button", { name: "Choose workspace preview file" }));
     await userEvent.click(await screen.findByRole("button", { name: "pages/home.html" }));
-    expect(await screen.findByTitle("Preview pages/home.html")).toBeTruthy();
-    const destroysBeforeCreateFinishes = calls.filter((call) => call.cmd === "preview_destroy").length;
 
-    await act(async () => {
-      pendingCreates.splice(0).forEach((resolve) => resolve());
-      await Promise.resolve();
-    });
-
-    expect(calls.filter((call) => call.cmd === "preview_destroy")).toHaveLength(destroysBeforeCreateFinishes + 1);
-    expect(calls.at(-1)?.cmd).toBe("preview_destroy");
+    await waitFor(() => expect(calls.some((call) => call.cmd === "preview_create_artifact" && call.args?.id === "s1" && call.args?.path === "pages/home.html")).toBe(true));
+    expect(screen.queryByTitle("Preview pages/home.html")).toBeNull();
   });
 
   it("switches artifact when initialTarget changes in the same session", async () => {
     const view = render(<DesignPreviewWorkbench sessionId="s1" initialTarget={{ kind: "artifact", path: "pages/first.html", artifactKind: "html" }} composer={composer} obscured={false} onClose={() => {}} />);
-    expect(await screen.findByTitle("Preview pages/first.html")).toBeTruthy();
+    await waitFor(() => expect(calls.some((c) => c.cmd === "preview_create_artifact" && c.args?.path === "pages/first.html")).toBe(true));
     view.rerender(<DesignPreviewWorkbench sessionId="s1" initialTarget={{ kind: "artifact", path: "pages/second.html", artifactKind: "html" }} composer={composer} obscured={false} onClose={() => {}} />);
-    expect(await screen.findByTitle("Preview pages/second.html")).toBeTruthy();
-    expect(calls.some((c) => c.cmd === "session_call" && (c.args?.payload as { path?: string })?.path === "pages/second.html")).toBe(true);
+    await waitFor(() => expect(calls.some((c) => c.cmd === "preview_create_artifact" && c.args?.path === "pages/second.html")).toBe(true));
   });
 
-  it("renders workspace HTML directly instead of relying on a blob frame URL", async () => {
+  it("serializes rapid artifact preview switches", async () => {
+    deferCreates = true;
+    const view = render(<DesignPreviewWorkbench sessionId="s1" initialTarget={{ kind: "artifact", path: "pages/first.html", artifactKind: "html" }} composer={composer} obscured={false} onClose={() => {}} />);
+    await waitFor(() => expect(pendingCreates).toHaveLength(1));
+
+    view.rerender(<DesignPreviewWorkbench sessionId="s1" initialTarget={{ kind: "artifact", path: "pages/second.html", artifactKind: "html" }} composer={composer} obscured={false} onClose={() => {}} />);
+    await act(async () => {
+      pendingCreates.shift()?.();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(pendingCreates).toHaveLength(1));
+    await act(async () => {
+      pendingCreates.shift()?.();
+      await Promise.resolve();
+    });
+
+    const paths = calls.filter((c) => c.cmd === "preview_create_artifact").map((c) => c.args?.path);
+    expect(paths).toEqual(["pages/first.html", "pages/second.html"]);
+    expect(calls.at(-1)?.cmd).not.toBe("preview_destroy");
+  });
+
+  it("renders workspace HTML without reading it through IPC", async () => {
     render(<DesignPreviewWorkbench sessionId="s1" initialTarget={{ kind: "artifact", path: "pages/home.html", artifactKind: "html" }} composer={composer} obscured={false} onClose={() => {}} />);
 
-    const iframe = await screen.findByTitle("Preview pages/home.html");
-    expect(iframe.getAttribute("sandbox")).toBe("allow-scripts");
-    expect(iframe.getAttribute("srcdoc")).toBe("<html>pages/home.html</html>");
-    expect(iframe.hasAttribute("src")).toBe(false);
+    await waitFor(() => expect(calls.some((c) => c.cmd === "preview_create_artifact" && c.args?.id === "s1" && c.args?.path === "pages/home.html")).toBe(true));
+    expect(calls.some((c) => c.cmd === "session_call" && c.args?.kind === "repo_artifact_read")).toBe(false);
   });
 
   it("browses, searches and renders HTML, image and text workspace artifacts", async () => {
@@ -122,9 +143,7 @@ describe("DesignPreviewWorkbench native lifecycle", () => {
     };
 
     await choose("home", "pages/home.html");
-    const iframe = await screen.findByTitle("Preview pages/home.html");
-    expect(iframe.getAttribute("sandbox")).toBe("allow-scripts");
-    expect(iframe.getAttribute("srcdoc")).toBe("<html>pages/home.html</html>");
+    await waitFor(() => expect(calls.some((call) => call.cmd === "preview_create_artifact" && call.args?.path === "pages/home.html")).toBe(true));
 
     await choose("hero", "images/hero.png");
     expect((await screen.findByRole("img", { name: "images/hero.png" })).getAttribute("src")).toBe("data:image/png;base64,AQID");
@@ -134,7 +153,7 @@ describe("DesignPreviewWorkbench native lifecycle", () => {
     const readPaths = calls
       .filter((call) => call.cmd === "session_call" && call.args?.kind === "repo_artifact_read")
       .map((call) => (call.args?.payload as { path?: string }).path);
-    expect(readPaths).toEqual(["pages/home.html", "images/hero.png", "notes/readme.txt"]);
+    expect(readPaths).toEqual(["images/hero.png", "notes/readme.txt"]);
   });
 
   it("serializes before editing and saves project-relative HTML through the backend", async () => {

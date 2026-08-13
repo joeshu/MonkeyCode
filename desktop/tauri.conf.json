@@ -52,6 +52,7 @@
             "allow-open-devtools",
             "allow-window-system-menu",
             "allow-preview-create",
+            "allow-preview-create-artifact",
             "allow-preview-show",
             "allow-preview-hide",
             "allow-preview-set-bounds",

@@ -191,7 +191,7 @@ describe("聊天视图", () => {
       { type: "task-running", kind: "acp_event", data: { update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "页面已经完成" } } }, seq: 5 },
       { type: "task-ended", seq: 6 },
     ]);
-    expect(await screen.findByTitle("Preview index.html")).toBeTruthy();
+    expect(await screen.findByTitle("index.html")).toBeTruthy();
     expect(screen.queryByTitle("Preview legacy.html")).toBeNull();
     view.unmount();
 
@@ -222,7 +222,7 @@ describe("聊天视图", () => {
       { type: "task-running", kind: "acp_event", data: { update: { sessionUpdate: "tool_call", toolCallId: "w1", title: "Write page", kind: "write", rawInput: { file_path: "/p/a/pages/login.html" } } }, seq: 13 },
       { type: "task-ended", seq: 14 },
     ]);
-    expect(await screen.findByTitle("Preview pages/login.html")).toBeTruthy();
+    expect(await screen.findByTitle("pages/login.html")).toBeTruthy();
     expect(screen.queryByTitle("Preview legacy.html")).toBeNull();
   });
 

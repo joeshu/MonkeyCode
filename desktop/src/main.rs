@@ -1318,6 +1318,7 @@ fn main() {
             uploads::stat_dropped_file,
             uploads::read_dropped_file,
             preview::preview_create,
+            preview::preview_create_artifact,
             preview::preview_show,
             preview::preview_hide,
             preview::preview_set_bounds,
