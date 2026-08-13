@@ -100,10 +100,10 @@ export function DesignPreviewWorkbench({
   const hostRef = useRef<HTMLDivElement>(null);
   const liveRef = useRef(0);
   const createdRef = useRef(false);
-  const latestRef = useRef({ sessionId, initialUrl });
-  latestRef.current = { sessionId, initialUrl };
   const [paneWidth, setPaneWidth] = useState<number | string>("65%");
   const [target, setTarget] = useState<DesignPreviewTarget>(initialTarget);
+  const latestRef = useRef({ sessionId, initialUrl, targetKind: target.kind });
+  latestRef.current = { sessionId, initialUrl, targetKind: target.kind };
   const [address, setAddress] = useState(initialUrl);
   const [filesOpen, setFilesOpen] = useState(false);
   const [previewFiles, setPreviewFiles] = useState<RepoPreviewFile[] | null>(null);
@@ -204,7 +204,10 @@ export function DesignPreviewWorkbench({
       starting = true;
       void previewCreate(url, { x: r.left, y: r.top, width: r.width, height: r.height }).then(() => {
         starting = false;
-        if (liveRef.current !== generation) return;
+        if (liveRef.current !== generation) {
+          if (latestRef.current.targetKind !== "localhost") void previewDestroy().catch(() => {});
+          return;
+        }
         createdRef.current = true;
         bounds();
       }, (error) => { starting = false; report(error); });

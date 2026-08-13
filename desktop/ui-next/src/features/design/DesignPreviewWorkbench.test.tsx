@@ -74,6 +74,25 @@ describe("DesignPreviewWorkbench native lifecycle", () => {
     expect(calls.some((c) => c.cmd === "preview_set_bounds")).toBe(true);
   });
 
+  it("destroys a native preview that finishes creating after switching to an artifact", async () => {
+    deferCreates = true;
+    mount();
+    await waitFor(() => expect(pendingCreates).toHaveLength(1));
+
+    await userEvent.click(screen.getByRole("button", { name: "Choose workspace preview file" }));
+    await userEvent.click(await screen.findByRole("button", { name: "pages/home.html" }));
+    expect(await screen.findByTitle("Preview pages/home.html")).toBeTruthy();
+    const destroysBeforeCreateFinishes = calls.filter((call) => call.cmd === "preview_destroy").length;
+
+    await act(async () => {
+      pendingCreates.splice(0).forEach((resolve) => resolve());
+      await Promise.resolve();
+    });
+
+    expect(calls.filter((call) => call.cmd === "preview_destroy")).toHaveLength(destroysBeforeCreateFinishes + 1);
+    expect(calls.at(-1)?.cmd).toBe("preview_destroy");
+  });
+
   it("switches artifact when initialTarget changes in the same session", async () => {
     const view = render(<DesignPreviewWorkbench sessionId="s1" initialTarget={{ kind: "artifact", path: "pages/first.html", artifactKind: "html" }} composer={composer} obscured={false} onClose={() => {}} />);
     expect(await screen.findByTitle("Preview pages/first.html")).toBeTruthy();
