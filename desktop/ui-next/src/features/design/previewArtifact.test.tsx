@@ -66,6 +66,12 @@ describe("preview artifact selection", () => {
     )).toEqual([{ path: "pages/login.html", status: "M" }]);
   });
 
+  it("maps absolute write paths into the workdir when the workspace is not a git repo", () => {
+    const paths = ["/Users/dev/test-design/index.html"];
+    expect(touchedTurnChanges([], [], paths, "/Users/dev/test-design"))
+      .toEqual([{ path: "index.html", status: "M" }]);
+  });
+
   it("classifies only tool action tokens, never read-like substrings in filenames", () => {
     expect(writtenToolPaths([
       { title: "Edit README.md", toolKind: undefined, rawInput: { file_path: "README.md" } },

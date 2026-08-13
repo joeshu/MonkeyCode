@@ -39,6 +39,16 @@ function normalizePath(path: string): string {
   return path.trim().replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/{2,}/g, "/");
 }
 
+/** 绝对路径落在 workdir 内时转成 workdir 相对路径(artifact_read 只收相对路径)。 */
+function toWorkdirRelative(path: string, workdir: string): string {
+  const normalized = normalizePath(path);
+  if (!normalized.startsWith("/")) return normalized;
+  const root = normalizePath(workdir).replace(/\/+$/, "");
+  if (normalized === root) return "";
+  if (normalized.startsWith(`${root}/`)) return normalized.slice(root.length + 1);
+  return normalized;
+}
+
 /** Paths explicitly named by write-like tools in the current turn. */
 export function writtenToolPaths(items: Pick<ToolItem, "title" | "toolKind" | "rawInput">[]): string[] {
   const paths = new Set<string>();
@@ -62,6 +72,7 @@ export function touchedTurnChanges(
   baseline: RepoChange[],
   ending: RepoChange[],
   toolPaths: string[],
+  workdir?: string,
 ): RepoChange[] {
   const baselinePaths = new Set(baseline.map((change) => normalizePath(change.path)));
   const selected = new Map<string, RepoChange>();
@@ -70,7 +81,8 @@ export function touchedTurnChanges(
     if (!baselinePaths.has(normalized)) selected.set(normalized, change);
   }
   for (const rawToolPath of toolPaths) {
-    const toolPath = normalizePath(rawToolPath);
+    const rel = workdir ? toWorkdirRelative(rawToolPath, workdir) : rawToolPath;
+    const toolPath = normalizePath(rel);
     const match = ending.find((change) => {
       const repoPath = normalizePath(change.path);
       return repoPath === toolPath || toolPath.endsWith(`/${repoPath}`);

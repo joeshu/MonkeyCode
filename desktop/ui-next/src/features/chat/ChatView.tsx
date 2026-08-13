@@ -41,7 +41,7 @@ import { OutlineNav, outlineEntriesOf } from "./OutlineNav";
 import { TaskPanel } from "./TaskPanel";
 import { FilesDrawer } from "@/features/files/FilesDrawer";
 import { DesignPreviewWorkbench } from "@/features/design/DesignPreviewWorkbench";
-import { hasDesignRelatedChanges, selectTurnPreviewArtifact, targetForFile, touchedTurnChanges, turnWarrantsArtifactPreview, writtenToolPaths, type DesignPreviewTarget } from "@/features/design/previewArtifact";
+import { hasDesignRelatedChanges, rankPreviewFiles, selectTurnPreviewArtifact, targetForFile, touchedTurnChanges, turnWarrantsArtifactPreview, writtenToolPaths, type DesignPreviewTarget } from "@/features/design/previewArtifact";
 import { currentTurnAgentPreviewUrl, newestAgentPreviewUrl, normalizePreviewUrl } from "@/features/design/previewUrl";
 import { useSessionFeed } from "./useSessionFeed";
 
@@ -394,6 +394,15 @@ export function ChatView({
     setPreview({ sessionId: metaRef.current.id, target: { kind: "localhost", url } });
     return true;
   }, []);
+  // 设计流程不输出 localhost URL，而是把 HTML 写进工作区：手动打开预览时
+  // 退化为扫描工作区内可预览 HTML，取排序后第一个。
+  const openArtifactPreview = useCallback(async () => {
+    const sessionId = metaRef.current.id;
+    const result = await repoPreviewFiles(sessionId);
+    if (metaRef.current.id !== sessionId) return;
+    const html = rankPreviewFiles(result.files).find((file) => file.kind === "html");
+    if (html) setPreview({ sessionId, target: targetForFile(html) });
+  }, []);
   const uploadUrl = useCallback((p: string) => uploadFileURL(metaRef.current.id, p), []);
   const loadDesignPreview = useCallback((p: string) => designTemplatePreviewRead(metaRef.current.id, p), []);
   const loadFullTool = useCallback((seq: number) => sessionFrame(metaRef.current.id, seq), []);
@@ -611,7 +620,7 @@ export function ChatView({
       if (changesGeneration.current !== generation || metaRef.current.id !== sessionId) return;
       const lastUser = state.items.findLastIndex((item) => item.kind === "user");
       const tools = state.items.slice(lastUser + 1).filter((item) => item.kind === "tool");
-      const touched = touchedTurnChanges(baseline.changes, result.changes, writtenToolPaths(tools));
+      const touched = touchedTurnChanges(baseline.changes, result.changes, writtenToolPaths(tools), meta.workdir);
       let artifact = selectTurnPreviewArtifact(touched, currentTurnText.user, currentTurnText.agent);
       if (!artifact && hasDesignRelatedChanges(touched) && turnWarrantsArtifactPreview(currentTurnText.user, currentTurnText.agent, touched)) {
         const files = await repoPreviewFiles(sessionId);
@@ -771,10 +780,15 @@ export function ChatView({
         <button
           type="button"
           aria-label="Open design preview"
-          title={detectedPreviewUrl ?? "No localhost URL in the latest assistant message"}
+          title={detectedPreviewUrl ?? "Open workspace design preview"}
           className="btn btn-ghost btn-square btn-sm text-base-content/60"
-          disabled={!detectedPreviewUrl}
-          onClick={() => detectedPreviewUrl && setPreview({ sessionId: meta.id, target: { kind: "localhost", url: detectedPreviewUrl } })}
+          onClick={() => {
+            if (detectedPreviewUrl) {
+              setPreview({ sessionId: meta.id, target: { kind: "localhost", url: detectedPreviewUrl } });
+            } else {
+              void openArtifactPreview();
+            }
+          }}
         >
           <IconBrowser size={16} stroke={1.75} aria-hidden />
         </button>
