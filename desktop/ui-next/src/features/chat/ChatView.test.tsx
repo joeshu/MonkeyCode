@@ -520,6 +520,31 @@ describe("聊天视图", () => {
     await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
   });
 
+  it("离底时收到模板选择请求会自动显露待交互卡片", async () => {
+    const meta = { ...META, id: "s-template-reveal" };
+    const { emit } = stubShell();
+    const { container } = render(<ChatView meta={meta} />);
+    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
+    const log = container.querySelector("[data-chat-log]") as HTMLElement;
+    Object.defineProperty(log, "scrollHeight", { value: 2468, configurable: true });
+    log.scrollTop = 0;
+    fireEvent.wheel(log, { deltaY: -120 });
+
+    emit("frames:s-template-reveal", [{
+      type: "design-template-selection-request",
+      seq: 3,
+      data: {
+        request_id: "template-request-1",
+        description: "企业 IM 落地页",
+        items: [{ id: "saas-landing", title: "SaaS 产品营销落地页", image: ".monkeycode/template.webp" }],
+        actions: { select: true, next: true, direct: true, cancel: true },
+      },
+    }]);
+
+    await waitFor(() => expect(screen.getByText("SaaS 产品营销落地页")).toBeTruthy());
+    expect(log.scrollTop).toBe(2468);
+  });
+
   // 任务面板钉在 composer 上方的 footer 里,footer 是 shrink-0、日志视口是
   // flex-1:plan 帧一到,面板撑高 footer 就把视口压矮同样多。内容没变、
   // scrollTop 不动,于是停在离底「正好一个面板高」的位置(用户报障 2026-08-06)。

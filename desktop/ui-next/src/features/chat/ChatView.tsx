@@ -209,6 +209,33 @@ export function ChatView({
   // 空态 = items 空且非 running(渲染分支与下方 RO 的重挂条件共用一个判定)
   const empty = state.items.length === 0 && !state.running;
 
+  const openInteractionId = useMemo(() => {
+    for (let i = state.items.length - 1; i >= 0; i--) {
+      const item = state.items[i]!;
+      if (item.kind === "design-template-selection" && item.state === "open") return `${meta.id}:design:${item.requestId}`;
+      if (item.kind === "ask" && item.state === "open") return `${meta.id}:ask:${item.askId}`;
+      if (item.kind === "perm" && item.state === "open") return `${meta.id}:perm:${item.id}`;
+    }
+    return "";
+  }, [meta.id, state.items]);
+  const revealedInteractionRef = useRef("");
+  useLayoutEffect(() => {
+    revealedInteractionRef.current = "";
+  }, [meta.id]);
+  // 阻塞式交互必须打断旧滚动锚点，否则 Agent 会等待视口外的卡片。
+  useLayoutEffect(() => {
+    if (!openInteractionId) {
+      revealedInteractionRef.current = "";
+      return;
+    }
+    if (revealedInteractionRef.current === openInteractionId) return;
+    revealedInteractionRef.current = openInteractionId;
+    finishRestore();
+    pinnedRef.current = true;
+    align();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openInteractionId]);
+
   // items 变化后赶在绘制前对齐(锚点恢复或贴底跟随)。
   // state.plan 也在依赖里:任务面板钉在 composer 上方(footer 内),plan 帧
   // 一到面板就撑高 footer,把 flex-1 的日志视口压矮同样多——内容没变、
