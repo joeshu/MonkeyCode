@@ -130,6 +130,7 @@ export function DesignPreviewWorkbench({
   const [picked, setPicked] = useState<ElementSnapshot | null>(null);
   const pickedRef = useRef<ElementSnapshot | null>(null);
   pickedRef.current = picked;
+  const pickedPreviewRequestRef = useRef(0);
   const commentRequestRef = useRef(0);
   const [pickedPreview, setPickedPreview] = useState<string | null>(null);
   const [commentText, setCommentText] = useState("");
@@ -467,26 +468,46 @@ export function DesignPreviewWorkbench({
     finally { feedbackSendingRef.current = false; setFeedbackSending(false); }
   };
   const refreshPickedPreview = async (selected: ElementSnapshot) => {
+    const request = ++pickedPreviewRequestRef.current;
     const selectedTarget = latestRef.current.targetKey;
-    const result = await requestCapture("viewport-no-copy");
-    if (pickedRef.current === selected && latestRef.current.targetKey === selectedTarget) setPickedPreview(result.dataUrl);
+    const isCurrent = () => pickedPreviewRequestRef.current === request && pickedRef.current === selected && latestRef.current.targetKey === selectedTarget;
+    try {
+      const result = await requestCapture("viewport-no-copy");
+      if (isCurrent()) setPickedPreview(result.dataUrl);
+    } catch (error) {
+      if (isCurrent()) throw error;
+    }
+  };
+  const dismissPicked = () => {
+    pickedPreviewRequestRef.current += 1;
+    setPicked(null);
+    setPickedPreview(null);
   };
   const applyEdit = async () => {
     if (!picked) return;
     const selected = picked;
     try {
       await previewElementApply({ selector: selected.selector, property, value: property === "delete" ? "" : value });
-      await refreshPickedPreview(selected);
-      setStatus(t("design.preview.applied"));
-    } catch (error) { report(error); }
+    } catch (error) {
+      report(error);
+      return;
+    }
+    setStatus(t("design.preview.applied"));
+    try { await refreshPickedPreview(selected); }
+    catch { dismissPicked(); }
   };
   const undoEdit = async () => {
     if (!picked) return;
     const selected = picked;
     try {
       await previewElementUndo();
-      await refreshPickedPreview(selected);
-    } catch (error) { report(error); }
+    } catch (error) {
+      report(error);
+      return;
+    }
+    setStatus("");
+    try { await refreshPickedPreview(selected); }
+    catch { dismissPicked(); }
   };
   const selectedPreviewPosition = (() => {
     const hostRect = hostRef.current?.getBoundingClientRect();
@@ -517,6 +538,20 @@ export function DesignPreviewWorkbench({
     ["delete", t("design.preview.property.delete")],
   ] as const;
   const propertyLabel = propertyOptions.find(([name]) => name === property)?.[1] ?? propertyOptions[0][1];
+  const selectProperty = (name: typeof propertyOptions[number][0]) => {
+    setProperty(name);
+    setValue(name === "text" ? picked?.text ?? "" : "");
+  };
+  const moveProperty = (offset: number) => {
+    const current = propertyOptions.findIndex(([name]) => name === property);
+    const next = (current + offset + propertyOptions.length) % propertyOptions.length;
+    selectProperty(propertyOptions[next]![0]);
+  };
+  const focusPropertyOption = (button: HTMLButtonElement, offset: number) => {
+    const options = Array.from(propertyMenuRef.current?.querySelectorAll<HTMLButtonElement>("[data-property-option]") ?? []);
+    const current = options.indexOf(button);
+    options[(current + offset + options.length) % options.length]?.focus();
+  };
 
   return (
     <aside ref={paneRef} aria-label={t("design.preview.workbench")} style={{ width: paneWidth }} className="relative flex min-w-80 shrink-0 flex-col border-s border-base-300 bg-base-100">
@@ -608,7 +643,7 @@ export function DesignPreviewWorkbench({
                   <strong className="block truncate rounded-field bg-primary/10 px-1.5 py-0.5 font-mono text-xs font-medium text-primary" title={picked.selector}>{picked.tag} · {picked.selector}</strong>
                 </div>
               </div>
-              <button aria-label={t("design.preview.close")} className="btn btn-ghost btn-square btn-xs -me-1 -mt-1 hover:bg-primary/10 hover:text-primary" onClick={() => { setPicked(null); setPickedPreview(null); }}><IconX size={14} /></button>
+              <button aria-label={t("design.preview.close")} className="btn btn-ghost btn-square btn-xs -me-1 -mt-1 hover:bg-primary/10 hover:text-primary" onClick={dismissPicked}><IconX size={14} /></button>
             </div>
             <dl className="mt-3 grid grid-cols-[3.5rem_minmax(0,1fr)] gap-x-2 gap-y-1.5 rounded-box border border-base-300 bg-base-200/60 px-3 py-2.5 text-xs">
               <dt className="text-base-content/50">{t("design.preview.elementSize")}</dt>
@@ -624,20 +659,43 @@ export function DesignPreviewWorkbench({
               <div className="mt-3 flex justify-end border-t border-base-300 pt-3"><button className="btn btn-primary btn-sm min-w-28" disabled={feedbackSending || !commentText.trim()} onClick={() => void submitElementComment()}><IconSend size={14} /> {t("design.preview.sendComment")}</button></div>
             </> : <>
               <details ref={propertyMenuRef} className="dropdown mt-3 w-full">
-                <summary aria-label={t("design.preview.elementProperty")} className="btn h-10 min-h-10 w-full justify-between border-base-300 bg-base-100 px-3 font-normal shadow-none hover:border-primary/40 hover:bg-base-200/60">
+                <summary
+                  aria-label={`${t("design.preview.elementProperty")}: ${propertyLabel}`}
+                  aria-haspopup="listbox"
+                  className="btn h-10 min-h-10 w-full justify-between border-base-300 bg-base-100 px-3 font-normal shadow-none hover:border-primary/40 hover:bg-base-200/60"
+                  onKeyDown={(event) => {
+                    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+                    event.preventDefault();
+                    moveProperty(event.key === "ArrowDown" ? 1 : -1);
+                  }}
+                >
                   <span className="truncate">{propertyLabel}</span>
                   <IconChevronDown size={15} stroke={1.75} className="shrink-0 text-base-content/50" />
                 </summary>
-                <ul role="listbox" className="menu dropdown-content z-20 mt-1 max-h-56 w-full flex-nowrap overflow-auto rounded-box border border-base-300 bg-base-100 p-1.5 shadow-xl">
+                <ul role="listbox" aria-label={t("design.preview.elementProperty")} className="menu dropdown-content z-20 mt-1 max-h-56 w-full flex-nowrap overflow-auto rounded-box border border-base-300 bg-base-100 p-1.5 shadow-xl">
                   {propertyOptions.map(([name, label]) => <li key={name}>
                     <button
+                      data-property-option={name}
                       role="option"
                       aria-selected={property === name}
+                      tabIndex={property === name ? 0 : -1}
                       className={`min-h-8 justify-between rounded-field px-2.5 text-xs ${property === name ? "menu-active font-medium" : ""}`}
                       onClick={() => {
-                        setProperty(name);
-                        setValue(name === "text" ? picked.text : "");
+                        selectProperty(name);
                         propertyMenuRef.current?.removeAttribute("open");
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Escape") {
+                          propertyMenuRef.current?.removeAttribute("open");
+                          propertyMenuRef.current?.querySelector("summary")?.focus();
+                        } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                          event.preventDefault();
+                          focusPropertyOption(event.currentTarget, event.key === "ArrowDown" ? 1 : -1);
+                        } else if (event.key === "Home" || event.key === "End") {
+                          event.preventDefault();
+                          const options = propertyMenuRef.current?.querySelectorAll<HTMLButtonElement>("[data-property-option]");
+                          options?.[event.key === "Home" ? 0 : options.length - 1]?.focus();
+                        }
                       }}
                     >
                       <span>{label}</span>
