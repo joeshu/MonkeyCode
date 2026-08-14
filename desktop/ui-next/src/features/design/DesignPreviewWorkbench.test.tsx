@@ -491,25 +491,35 @@ describe("DesignPreviewWorkbench native lifecycle", () => {
     fireEvent(surface, new MouseEvent("pointerdown", { bubbles: true, clientX: 460, clientY: 200 }));
     fireEvent(surface, new MouseEvent("pointermove", { bubbles: true, clientX: 580, clientY: 280 }));
 
-    const rect = surface.querySelector("rect");
+    const rect = surface.querySelector('rect[stroke="red"]');
     expect(rect).toBeTruthy();
     expect(rect?.getAttribute("width")).toBe("20");
     expect(rect?.getAttribute("height")).toBe("20");
 
     fireEvent(surface, new MouseEvent("pointercancel", { bubbles: true }));
-    expect(surface.querySelector("rect")).toBeNull();
+    expect(surface.querySelector('rect[stroke="red"]')).toBeNull();
   });
 
-  it("opens and focuses the inline editor as soon as the text tool is selected", async () => {
+  it("opens the inline editor at the clicked image position and commits its text", async () => {
     mount();
     await userEvent.click(screen.getByRole("button", { name: /Mark/ }));
     await userEvent.click(await screen.findByRole("button", { name: "Text" }));
 
+    expect(screen.queryByLabelText("Annotation text")).toBeNull();
+    const surface = screen.getByLabelText("Annotation surface");
+    vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({ x: 400, y: 80, left: 400, top: 80, right: 1000, bottom: 480, width: 600, height: 400, toJSON() {} });
+    fireEvent.pointerDown(surface, { clientX: 460, clientY: 200 });
+
     const input = screen.getByLabelText("Annotation text");
+    expect(input.style.left).toBe("10%");
+    expect(input.style.top).toBe("30%");
     expect(document.activeElement).toBe(input);
     await userEvent.type(input, "Move this section{Enter}");
 
-    expect(screen.getByText("Move this section")).toBeTruthy();
+    const text = surface.querySelector("text");
+    expect(text?.textContent).toBe("Move this section");
+    expect(text?.getAttribute("x")).toBe("10");
+    expect(text?.getAttribute("y")).toBe("30");
   });
 
   it("sends the Agent message with the composed PNG", async () => {

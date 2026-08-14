@@ -713,7 +713,7 @@ export function DesignPreviewWorkbench({
         {capture && (
           <div className="absolute inset-0 z-20 flex flex-col bg-base-200 p-2">
             <div className="flex shrink-0 flex-wrap items-center gap-1 pb-2">
-              {([['rect', IconSquare], ['pen', IconPencil], ['text', IconCode]] as const).map(([name, Icon]) => <button key={name} className={`btn btn-xs ${tool === name ? "btn-active" : "btn-ghost"}`} onClick={() => { setTool(name); setTextDraft(name === "text" ? { x: 50, y: 50, text: "" } : null); }}><Icon size={13} /> {t(`design.preview.capture.${name}` as MessageKey)}</button>)}
+              {([['rect', IconSquare], ['pen', IconPencil], ['text', IconCode]] as const).map(([name, Icon]) => <button key={name} className={`btn btn-xs ${tool === name ? "btn-active" : "btn-ghost"}`} onClick={() => { setTool(name); setTextDraft(null); }}><Icon size={13} /> {t(`design.preview.capture.${name}` as MessageKey)}</button>)}
               <button className="btn btn-ghost btn-xs ms-auto" onClick={() => setAnnotations((a) => a.slice(0, -1))}><IconArrowBackUp size={13} /> {t("design.preview.undo")}</button>
               <button className="btn btn-ghost btn-xs" onClick={() => setAnnotations([])}><IconTrash size={13} /> {t("design.preview.capture.clear")}</button>
               <button className="btn btn-ghost btn-xs" onClick={() => void downloadAnnotated(capture, annotations).catch(report)}><IconDownload size={13} /> {t("design.preview.capture.download")}</button>
@@ -723,6 +723,7 @@ export function DesignPreviewWorkbench({
               <div className="relative w-fit max-w-full">
                 <img src={capture} alt={t("design.preview.capture.image")} className="block max-w-full select-none" draggable={false} />
                 <svg aria-label={t("design.preview.capture.surface")} className="absolute inset-0 size-full touch-none" viewBox="0 0 100 100" preserveAspectRatio="none" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel}>
+                  <rect x="0" y="0" width="100" height="100" fill="transparent" pointerEvents="all" />
                   {[...annotations, ...(drawingAnnotation ? [drawingAnnotation] : [])].map((a, i) => a.kind === "rect" ? <rect key={i} x={Math.min(a.x, a.x + a.width)} y={Math.min(a.y, a.y + a.height)} width={Math.abs(a.width)} height={Math.abs(a.height)} fill="none" stroke="red" strokeWidth="0.5" /> : a.kind === "pen" ? <polyline key={i} points={a.points.map((p) => `${p.x},${p.y}`).join(' ')} fill="none" stroke="red" strokeWidth="0.6" /> : <text key={i} x={a.x} y={a.y} fill="red" fontSize="3">{a.text}</text>)}
                 </svg>
                 {textDraft && <input
