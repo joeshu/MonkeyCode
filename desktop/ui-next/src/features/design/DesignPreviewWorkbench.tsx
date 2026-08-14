@@ -786,20 +786,25 @@ export function DesignPreviewWorkbench({
       height: hostRect?.height ?? 0,
     };
   })();
-  const selectedElementPosition = {
-    left: selectedPreviewPosition.left + (picked?.bounds.x ?? 0),
-    top: selectedPreviewPosition.top + (picked?.bounds.y ?? 0) + (picked?.bounds.height ?? 0) + 8,
-  };
+  const selectedElementLeft = selectedPreviewPosition.left + (picked?.bounds.x ?? 0);
+  const selectedElementTop = selectedPreviewPosition.top + (picked?.bounds.y ?? 0);
+  const selectedElementBottom = selectedElementTop + (picked?.bounds.height ?? 0);
   const overlayWidth = overlayBounds?.width ?? 0;
   const overlayHeight = overlayBounds?.height ?? 0;
   const selectedElementDialogWidth = Math.min(352, Math.max(0, overlayWidth - 24));
   const selectedElementDialogLeft = Math.max(12, overlayWidth > 0
-    ? Math.min(selectedElementPosition.left, overlayWidth - selectedElementDialogWidth - 12)
-    : selectedElementPosition.left);
-  const selectedElementDialogMinHeight = Math.min(160, Math.max(0, overlayHeight - 24));
-  const selectedElementDialogTop = Math.max(12, overlayHeight > 0
-    ? Math.min(selectedElementPosition.top, overlayHeight - selectedElementDialogMinHeight - 12)
-    : selectedElementPosition.top);
+    ? Math.min(selectedElementLeft, overlayWidth - selectedElementDialogWidth - 12)
+    : selectedElementLeft);
+  const selectedElementDialogBelowTop = Math.max(12, selectedElementBottom + 8);
+  const selectedElementDialogBelowSpace = Math.max(0, overlayHeight - selectedElementDialogBelowTop - 12);
+  const selectedElementDialogAboveSpace = Math.max(0, selectedElementTop - 20);
+  const selectedElementDialogPreferredHeight = Math.min(320, Math.max(0, overlayHeight - 24));
+  const selectedElementDialogAbove = overlayHeight > 0
+    && selectedElementDialogBelowSpace < selectedElementDialogPreferredHeight
+    && selectedElementDialogAboveSpace > selectedElementDialogBelowSpace;
+  const selectedElementDialogStyle = selectedElementDialogAbove
+    ? { left: selectedElementDialogLeft, bottom: Math.max(12, overlayHeight - selectedElementTop + 8), maxHeight: selectedElementDialogAboveSpace }
+    : { left: selectedElementDialogLeft, top: selectedElementDialogBelowTop, maxHeight: selectedElementDialogBelowSpace };
 
   return (
     <aside ref={paneRef} aria-label={t("design.preview.workbench")} style={{ width: paneWidth }} className="relative flex min-w-80 shrink-0 flex-col border-s border-base-300 bg-base-100">
@@ -879,7 +884,7 @@ export function DesignPreviewWorkbench({
             role="dialog"
             aria-label={t("design.preview.element")}
             className="pointer-events-auto absolute w-[352px] max-w-[calc(100%-1.5rem)] overflow-auto rounded-box border border-primary/25 bg-base-100 p-4 shadow-2xl ring-1 ring-primary/10"
-            style={{ left: selectedElementDialogLeft, top: selectedElementDialogTop, maxHeight: `calc(100% - ${selectedElementDialogTop + 12}px)` }}
+            style={selectedElementDialogStyle}
           >
             <div className="flex items-start gap-3">
               <div className="flex size-8 shrink-0 items-center justify-center rounded-field bg-primary/12 text-primary">
