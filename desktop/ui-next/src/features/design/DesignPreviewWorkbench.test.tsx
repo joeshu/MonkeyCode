@@ -296,6 +296,21 @@ describe("DesignPreviewWorkbench native lifecycle", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Selected element" })).toBeNull());
   });
 
+  it("ignores an old element capture after reopening the picker", async () => {
+    deferCaptures = true;
+    mount();
+    await userEvent.click(screen.getByRole("button", { name: /Annotate/ }));
+    await waitFor(() => expect(events.has("preview-element-picked")).toBe(true));
+    act(() => events.get("preview-element-picked")?.({ payload: { tag: "A", selector: "nav > a", text: "Docs", bounds: { x: 10, y: 20, width: 120, height: 32 }, styles: {} } }));
+    await waitFor(() => expect(calls.some((call) => call.cmd === "preview_capture")).toBe(true));
+    const captureCall = calls.filter((call) => call.cmd === "preview_capture").at(-1);
+
+    await userEvent.click(screen.getByRole("button", { name: /Annotate/ }));
+    act(() => events.get("preview-captured")?.({ payload: { requestId: captureCall?.args?.requestId, dataUrl: "data:image/png;base64,AQID" } }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Selected element" })).toBeNull());
+  });
+
   it("keeps the selected page visible behind the comment panel", async () => {
     mount();
     await userEvent.click(screen.getByRole("button", { name: /Annotate/ }));

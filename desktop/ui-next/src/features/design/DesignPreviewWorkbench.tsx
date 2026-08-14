@@ -330,7 +330,10 @@ export function DesignPreviewWorkbench({
     pickerRef.current = next;
     setPicker(next);
     setPickerPurpose(next ? purpose : null);
-    if (next) { setPicked(null); setPickedPreview(null); setCommentText(""); }
+    if (next) {
+      elementSelectionRef.current += 1;
+      setPicked(null); setPickedPreview(null); setCommentText("");
+    }
     setStatus(next ? t(purpose === "comment" ? "design.preview.commentHint" : "design.preview.editHint") : "");
     pickerCommandRef.current = pickerCommandRef.current
       .catch(() => undefined)
