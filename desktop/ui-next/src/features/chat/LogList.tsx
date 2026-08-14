@@ -125,7 +125,7 @@ function UserBubble({
   );
 }
 
-function ThoughtBlock({ item }: { item: Extract<ChatItem, { kind: "thought" }> }) {
+function ThoughtBlock({ item, streaming }: { item: Extract<ChatItem, { kind: "thought" }>; streaming?: boolean }) {
   const { t } = useI18n();
   // 正文过 thoughtMarkdown:流式裸拼的相邻加粗标题(****)先补成段落边界
   const md = thoughtMarkdown(item.text);
@@ -160,7 +160,7 @@ function ThoughtBlock({ item }: { item: Extract<ChatItem, { kind: "thought" }> }
           自带的 1rem 内距把条子推进卡内,任何圆角口径都不碰边。 */}
       <div className="collapse-content text-xs">
         <div className="border-s-2 border-base-300 ps-3">
-          <Markdown source={md} className="opacity-80" />
+          <Markdown source={md} className="opacity-80" deferMermaid={streaming} />
         </div>
       </div>
     </details>
@@ -194,6 +194,8 @@ interface RenderOpts extends RowShared {
   /** 相邻工具卡共享外框(旧 tool-stack;LogList 按可见邻居计算)。 */
   joinPrev?: boolean;
   joinNext?: boolean;
+  /** 当前仍在追加正文的行暂缓 Mermaid 渲染。 */
+  streaming?: boolean;
 }
 
 function renderItem(item: ChatItem, o: RenderOpts) {
@@ -205,7 +207,13 @@ function renderItem(item: ChatItem, o: RenderOpts) {
       return (
         <div className="group relative flex flex-col">
           <MessageTime timestamp={item.timestamp} className="absolute -top-3.5 start-0" />
-          <Markdown source={item.text} localImageUrl={o.uploadUrl} onLocalLink={o.onLocalLink} onUrlLink={o.onPreviewUrl} />
+          <Markdown
+            source={item.text}
+            localImageUrl={o.uploadUrl}
+            onLocalLink={o.onLocalLink}
+            onUrlLink={o.onPreviewUrl}
+            deferMermaid={o.streaming}
+          />
         </div>
       );
     case "thought":
@@ -213,7 +221,7 @@ function renderItem(item: ChatItem, o: RenderOpts) {
       return (
         <div className="group relative flex flex-col">
           <MessageTime timestamp={item.timestamp} className="absolute -top-3.5 start-0" />
-          <ThoughtBlock item={item} />
+          <ThoughtBlock item={item} streaming={o.streaming} />
         </div>
       );
     case "tool":
@@ -303,6 +311,7 @@ const Row = memo(function Row({
   item,
   perm,
   flash,
+  streaming,
   joinPrev,
   joinNext,
   gap,
@@ -311,6 +320,7 @@ const Row = memo(function Row({
   item: ChatItem;
   perm?: PermItem;
   flash?: boolean;
+  streaming?: boolean;
   joinPrev: boolean;
   joinNext: boolean;
   /** 消息块间距(组内工具卡零距共享外框);包裹层 margin,见 LogList 注释 */
@@ -329,7 +339,7 @@ const Row = memo(function Row({
     // 画在盒内,剪枝规则不再需要任何 hover 例外。首行(gap=false 且非
     // join)给 pt-3.5 刚好容下时间行;join 行零距契约不变(不渲时间)。
     <div className={`flex flex-col ${gap ? "pt-4" : joinPrev ? "" : "pt-3.5"}`}>
-      {renderItem(item, { t, perm, flash, joinPrev, joinNext, ...shared })}
+      {renderItem(item, { t, perm, flash, streaming, joinPrev, joinNext, ...shared })}
     </div>
   );
 });
@@ -832,6 +842,11 @@ export const LogList = memo(function LogList({
             item={item}
             perm={permOf(item)}
             flash={item.kind === "user" && item.seq !== undefined && item.seq === flashSeq}
+            streaming={
+              i === state.items.length - 1 &&
+              (item.kind === "agent" || item.kind === "thought") &&
+              state.streamKind === item.kind
+            }
             joinPrev={joinPrev}
             joinNext={joinNext}
             gap={gap}
