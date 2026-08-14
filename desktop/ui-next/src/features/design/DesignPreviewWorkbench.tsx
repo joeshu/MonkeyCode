@@ -114,7 +114,18 @@ function ElementSelect({
           role="option"
           aria-selected={option === value}
           className={`flex h-7 w-full items-center gap-2 rounded-field px-2 text-left text-xs transition-colors ${option === value ? "bg-primary/12 font-medium text-primary" : "text-base-content/80 hover:bg-base-200"}`}
-          onClick={() => { onChange(option); setOpen(false); triggerRef.current?.focus(); }}
+          onPointerDown={(event) => {
+            event.preventDefault();
+            onChange(option);
+            setOpen(false);
+            triggerRef.current?.focus();
+          }}
+          onClick={(event) => {
+            if (event.detail !== 0) return;
+            onChange(option);
+            setOpen(false);
+            triggerRef.current?.focus();
+          }}
           onKeyDown={(event) => {
             if (event.key === "Escape") { setOpen(false); triggerRef.current?.focus(); }
             if (event.key === "ArrowDown") { event.preventDefault(); moveFocus(event.currentTarget, 1); }

@@ -435,6 +435,28 @@ describe("DesignPreviewWorkbench native lifecycle", () => {
     expect(panel.style.left).toContain("236px");
   });
 
+  it("selects element layout options before WebKit blur closes the list", async () => {
+    mount();
+    await userEvent.click(screen.getByRole("button", { name: /Edit/ }));
+    await waitFor(() => expect(events.has("preview-element-picked")).toBe(true));
+    act(() => events.get("preview-element-picked")?.({ payload: {
+      selector: "#hero", text: "Hello", tag: "DIV", bounds: { x: 0, y: 0, width: 100, height: 20 },
+      styles: { alignItems: "normal" },
+    } }));
+    const panel = await screen.findByRole("dialog", { name: "Selected element" });
+    const align = within(panel).getByRole("button", { name: "Align" });
+    await userEvent.click(align);
+
+    fireEvent.pointerDown(within(panel).getByRole("option", { name: "center" }));
+    fireEvent.blur(align, { relatedTarget: null });
+    await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(calls).toContainEqual({
+      cmd: "preview_element_apply",
+      args: { edit: { selector: "#hero", property: "alignItems", value: "center" } },
+    }));
+  });
+
   it("edits grouped element styles and saves only changed values", async () => {
     mount();
     await userEvent.click(screen.getByRole("button", { name: /Edit/ }));

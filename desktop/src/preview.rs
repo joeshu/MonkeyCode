@@ -328,7 +328,7 @@ fn preview_zoom() -> Result<f64, String> {
 }
 fn zoom_script(scale: f64) -> String {
     format!(
-        "(()=>{{const target=document.getElementById('root')||document.body.firstElementChild||document.body;if(!target)throw new Error('找不到页面根元素');const root=document.documentElement,body=document.body,w=root.clientWidth,h=root.clientHeight,s={scale};target.style.setProperty('width',w+'px','important');target.style.setProperty('min-height',h+'px','important');target.style.setProperty('transform','scale('+s+')','important');target.style.setProperty('transform-origin','0 0','important');target.style.removeProperty('margin-left');body.style.setProperty('width',Math.max(w,w*s)+'px','important');body.style.setProperty('min-height',Math.max(h,h*s)+'px','important');body.style.setProperty('overflow','visible','important');root.style.setProperty('overflow','auto','important');target.dataset.mcZoom=String(s)}})()"
+        "(()=>{{const target=document.getElementById('root')||document.body.firstElementChild||document.body;if(!target)throw new Error('找不到页面根元素');const root=document.documentElement,body=document.body,s={scale},key='__mcPreviewZoomState',previous=window[key];if(previous){{for(const item of previous){{if(item.value)item.element.style.setProperty(item.name,item.value,item.priority);else item.element.style.removeProperty(item.name)}}delete window[key]}}if(s===1)return;const saved=[];const set=(element,name,value)=>{{if(!saved.some(item=>item.element===element&&item.name===name))saved.push({{element,name,value:element.style.getPropertyValue(name),priority:element.style.getPropertyPriority(name)}});element.style.setProperty(name,value,'important')}};window[key]=saved;const w=root.clientWidth,h=root.clientHeight;set(target,'width',w+'px');set(target,'min-height',h+'px');set(target,'transform','scale('+s+')');set(target,'transform-origin','0 0');set(body,'width',Math.max(w,w*s)+'px');set(body,'min-height',Math.max(h,h*s)+'px');set(body,'overflow','visible');set(root,'overflow','auto')}})()"
     )
 }
 fn apply_zoom(view: &tauri::Webview, scale: f64) -> Result<(), String> {
@@ -1028,9 +1028,19 @@ mod tests {
     #[test]
     fn zoom_scales_from_the_page_origin() {
         let script = zoom_script(1.25);
-        assert!(script.contains("transform-origin','0 0'"));
+        assert!(script.contains("set(target,'transform-origin','0 0')"));
         assert!(script.contains("s=1.25"));
         assert!(!script.contains("transform-origin','50% 50%'"));
+    }
+    #[test]
+    fn zoom_restores_page_styles_at_full_size() {
+        let script = zoom_script(1.0);
+        assert!(script.contains("if(s===1)return"));
+        assert!(script.contains("priority:element.style.getPropertyPriority(name)"));
+        assert!(
+            script.contains("item.element.style.setProperty(item.name,item.value,item.priority)")
+        );
+        assert!(!script.contains("removeProperty('margin-left')"));
     }
     #[test]
     fn capture_size_limit_and_png_data_url() {
