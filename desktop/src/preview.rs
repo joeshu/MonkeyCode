@@ -20,6 +20,7 @@ const RESULT_SCHEME: &str = "monkeycode-picker";
 const PREVIEW_RESULT_SCHEME: &str = "monkeycode-preview-result";
 const MAX_RESULT_BYTES: usize = 32 * 1024;
 static PICKER_ACTIVE: AtomicBool = AtomicBool::new(false);
+static PREVIEW_ZOOM: Mutex<f64> = Mutex::new(1.0);
 const SERIALIZE_SCHEME: &str = "monkeycode-serialize";
 const SERIALIZE_JS: &str = r#"(()=>{window.__mcSerialize=async id=>{try{const html='<!doctype html>\n'+new XMLSerializer().serializeToString(document.documentElement);if(new TextEncoder().encode(html).length>8388608)throw Error('HTML 超过 8 MiB 限制');const n=4000,total=Math.ceil(html.length/n);for(let i=0;i<total;i++){location.href=`monkeycode-serialize://${id}?index=${i}&total=${total}&data=${encodeURIComponent(html.slice(i*n,(i+1)*n))}`;await new Promise(r=>setTimeout(r,0))}}catch(e){location.href=`monkeycode-serialize://${id}?error=${encodeURIComponent(String(e?.message||e))}`}}})()"#;
 
@@ -319,6 +320,20 @@ fn preview_url(raw: &str) -> Result<Url, String> {
 fn webview(app: &AppHandle) -> Result<tauri::Webview, String> {
     app.get_webview(LABEL).ok_or_else(|| "预览尚未创建".into())
 }
+fn preview_zoom() -> Result<f64, String> {
+    PREVIEW_ZOOM
+        .lock()
+        .map(|zoom| *zoom)
+        .map_err(|_| "预览缩放状态锁损坏".into())
+}
+fn zoom_script(scale: f64) -> String {
+    format!(
+        "(()=>{{const target=document.getElementById('root')||document.body.firstElementChild||document.body;if(!target)throw new Error('找不到页面根元素');const root=document.documentElement,body=document.body,w=root.clientWidth,h=root.clientHeight,s={scale};target.style.setProperty('width',w+'px','important');target.style.setProperty('min-height',h+'px','important');target.style.setProperty('transform','scale('+s+')','important');target.style.setProperty('transform-origin','0 0','important');target.style.removeProperty('margin-left');body.style.setProperty('width',Math.max(w,w*s)+'px','important');body.style.setProperty('min-height',Math.max(h,h*s)+'px','important');body.style.setProperty('overflow','visible','important');root.style.setProperty('overflow','auto','important');target.dataset.mcZoom=String(s)}})()"
+    )
+}
+fn apply_zoom(view: &tauri::Webview, scale: f64) -> Result<(), String> {
+    view.eval(zoom_script(scale)).map_err(|e| e.to_string())
+}
 fn valid_selector(s: &str) -> bool {
     !s.is_empty() && s.len() <= 2048 && !s.chars().any(char::is_control)
 }
@@ -515,6 +530,9 @@ fn create_preview(
                     ));
                     let _ = webview.eval(CAPTURE_JS);
                     let _ = webview.eval(SERIALIZE_JS);
+                    if let Ok(scale) = preview_zoom() {
+                        let _ = apply_zoom(&webview, scale);
+                    }
                 }),
             LogicalPosition::new(bounds.x, bounds.y),
             LogicalSize::new(bounds.width, bounds.height),
@@ -564,7 +582,8 @@ pub fn preview_set_bounds(app: AppHandle, bounds: PreviewBounds) -> Result<(), S
     v.set_position(LogicalPosition::new(b.x, b.y))
         .map_err(|e| e.to_string())?;
     v.set_size(LogicalSize::new(b.width, b.height))
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    apply_zoom(&v, preview_zoom()?)
 }
 #[tauri::command]
 pub fn preview_navigate(app: AppHandle, url: String) -> Result<(), String> {
@@ -581,24 +600,8 @@ pub fn preview_set_zoom(app: AppHandle, scale: f64) -> Result<(), String> {
     if !scale.is_finite() || !(0.1..=5.0).contains(&scale) {
         return Err("缩放比例必须在 10% 到 500% 之间".into());
     }
-    let view = webview(&app)?;
-    #[cfg(target_os = "macos")]
-    {
-        view.eval("(()=>{const target=document.querySelector('[data-mc-zoom]');if(!target)return;for(const name of ['width','min-height','transform','transform-origin','margin-left'])target.style.removeProperty(name);delete target.dataset.mcZoom;for(const name of ['width','min-height','overflow'])document.body.style.removeProperty(name);document.documentElement.style.removeProperty('overflow')})()")
-            .map_err(|e| e.to_string())?;
-        view.with_webview(move |platform| unsafe {
-            let wk: &objc2_web_kit::WKWebView = &*platform.inner().cast();
-            wk.setPageZoom(scale);
-        })
-        .map_err(|e| e.to_string())
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        view.eval(format!(
-            "(()=>{{const target=document.getElementById('root')||document.body.firstElementChild||document.body;if(!target)throw new Error('找不到页面根元素');const root=document.documentElement,body=document.body,w=root.clientWidth,h=root.clientHeight,s={scale};target.style.setProperty('width',w+'px','important');target.style.setProperty('min-height',h+'px','important');target.style.setProperty('transform','scale('+s+')','important');target.style.setProperty('transform-origin','50% 50%','important');target.style.removeProperty('margin-left');body.style.setProperty('width',Math.max(w,w*s)+'px','important');body.style.setProperty('min-height',Math.max(h,h*s)+'px','important');body.style.setProperty('overflow','visible','important');root.style.setProperty('overflow','auto','important');target.dataset.mcZoom=String(s)}})()"
-        ))
-        .map_err(|e| e.to_string())
-    }
+    *PREVIEW_ZOOM.lock().map_err(|_| "预览缩放状态锁损坏")? = scale;
+    apply_zoom(&webview(&app)?, scale)
 }
 #[tauri::command]
 pub fn preview_destroy(app: AppHandle) -> Result<(), String> {
@@ -1021,6 +1024,13 @@ mod tests {
         assert!(valid_text_value("line one\nline two; { ok }"));
         assert!(valid_text_value(&"x".repeat(32 * 1024)));
         assert!(!valid_text_value(&"x".repeat(32 * 1024 + 1)));
+    }
+    #[test]
+    fn zoom_scales_from_the_page_origin() {
+        let script = zoom_script(1.25);
+        assert!(script.contains("transform-origin','0 0'"));
+        assert!(script.contains("s=1.25"));
+        assert!(!script.contains("transform-origin','50% 50%'"));
     }
     #[test]
     fn capture_size_limit_and_png_data_url() {

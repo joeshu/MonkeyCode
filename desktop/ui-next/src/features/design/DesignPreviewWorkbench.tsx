@@ -348,6 +348,8 @@ export function DesignPreviewWorkbench({
   const [filesLoading, setFilesLoading] = useState(false);
   const [tab, setTab] = useState<"preview" | "code">("preview");
   const [zoom, setZoom] = useState(100);
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
   const [preset, setPreset] = useState<keyof typeof PRESETS>("desktop");
   const [status, setStatus] = useState("");
   const [html, setHtml] = useState("");
@@ -470,7 +472,7 @@ export function DesignPreviewWorkbench({
           return;
         }
         createdRef.current = true;
-        bounds();
+        void previewSetZoom(zoomRef.current / 100).then(bounds).catch(report);
         if (pickerRef.current) void previewPickerToggle(true).catch((error) => { setPicker(false); report(error); });
       }, (error) => { starting = false; report(error); });
     };

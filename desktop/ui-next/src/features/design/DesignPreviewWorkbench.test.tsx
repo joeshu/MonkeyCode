@@ -130,6 +130,20 @@ describe("DesignPreviewWorkbench native lifecycle", () => {
     expect(screen.queryByTitle("Preview pages/home.html")).toBeNull();
   });
 
+  it("preserves zoom when the native preview is recreated", async () => {
+    mount();
+    await waitFor(() => expect(calls.some((c) => c.cmd === "preview_create")).toBe(true));
+    await userEvent.selectOptions(screen.getByLabelText("Zoom"), "125");
+    await waitFor(() => expect(calls).toContainEqual({ cmd: "preview_set_zoom", args: { scale: 1.25 } }));
+
+    calls = [];
+    await userEvent.click(screen.getByRole("button", { name: "Choose workspace preview file" }));
+    await userEvent.click(await screen.findByRole("button", { name: "pages/home.html" }));
+
+    await waitFor(() => expect(calls.some((c) => c.cmd === "preview_create_artifact")).toBe(true));
+    await waitFor(() => expect(calls).toContainEqual({ cmd: "preview_set_zoom", args: { scale: 1.25 } }));
+  });
+
   it("switches artifact when initialTarget changes in the same session", async () => {
     const view = render(<DesignPreviewWorkbench sessionId="s1" initialTarget={{ kind: "artifact", path: "pages/first.html", artifactKind: "html" }} composer={composer} obscured={false} onClose={() => {}} />);
     await waitFor(() => expect(calls.some((c) => c.cmd === "preview_create_artifact" && c.args?.path === "pages/first.html")).toBe(true));
@@ -205,6 +219,7 @@ describe("DesignPreviewWorkbench native lifecycle", () => {
   it("drives every preview toolbar control through its backend command", async () => {
     mount();
     await waitFor(() => expect(calls.some((c) => c.cmd === "preview_create")).toBe(true));
+    await waitFor(() => expect(calls).toContainEqual({ cmd: "preview_set_zoom", args: { scale: 1 } }));
 
     await userEvent.click(screen.getByRole("button", { name: "Tablet" }));
     await waitFor(() => expect(calls.some((c) => c.cmd === "preview_set_bounds")).toBe(true));
