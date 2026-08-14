@@ -1,7 +1,7 @@
 import {
   IconArrowBackUp, IconBrowser, IconCamera, IconCode, IconDeviceDesktop, IconDeviceMobile,
   IconDeviceTablet, IconDownload, IconMessage, IconPencil, IconPointer, IconRefresh,
-  IconSend, IconSquare, IconTrash, IconX, IconFolder, IconCheck, IconChevronDown,
+  IconSend, IconSquare, IconTrash, IconX, IconFolder,
 } from "@tabler/icons-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 
@@ -14,7 +14,7 @@ import {
   onPreviewElementPicked, onPreviewPickerError, onPreviewResultAction, previewCreate, previewCreateArtifact,
   previewDestroy, previewElementApply, previewElementUndo, previewHide, previewNavigate, previewPickerToggle,
   previewReload, previewResultHide, previewResultShow, previewSaveHtml, previewSetBounds,
-  previewSetZoom, previewShow, requestCapture, requestSerialization, type ElementSnapshot,
+  previewSetZoom, previewShow, requestCapture, requestSerialization, type ElementSnapshot, type ElementStyles,
 } from "./previewIpc";
 import { normalizePreviewUrl } from "./previewUrl";
 
@@ -24,6 +24,28 @@ type Annotation =
   | { kind: "text"; x: number; y: number; text: string };
 type Tool = Annotation["kind"];
 type DrawingAnnotation = Exclude<Annotation, { kind: "text" }>;
+
+type ElementDraft = ElementStyles & { text: string };
+type StyleProperty = keyof ElementStyles;
+
+const EMPTY_ELEMENT_STYLES: ElementStyles = {
+  color: "", backgroundColor: "", fontSize: "", opacity: "", width: "", height: "",
+  justifyContent: "", alignItems: "",
+  paddingTop: "", paddingRight: "", paddingBottom: "", paddingLeft: "",
+  marginTop: "", marginRight: "", marginBottom: "", marginLeft: "",
+  borderTopWidth: "", borderRightWidth: "", borderBottomWidth: "", borderLeftWidth: "",
+  borderStyle: "", borderColor: "", borderRadius: "",
+};
+
+function elementDraftOf(snapshot: ElementSnapshot): ElementDraft {
+  return {
+    ...EMPTY_ELEMENT_STYLES,
+    ...snapshot.styles,
+    width: snapshot.styles?.width || `${Math.round(snapshot.bounds.width)}px`,
+    height: snapshot.styles?.height || `${Math.round(snapshot.bounds.height)}px`,
+    text: snapshot.text,
+  };
+}
 
 const PRESETS = { desktop: 1280, tablet: 768, mobile: 390 } as const;
 
@@ -126,7 +148,6 @@ export function DesignPreviewWorkbench({
   pickerRef.current = picker;
   const pickerCommandRef = useRef<Promise<void>>(Promise.resolve());
   const overlayRef = useRef<HTMLDivElement>(null);
-  const propertyMenuRef = useRef<HTMLDetailsElement>(null);
   const [picked, setPicked] = useState<ElementSnapshot | null>(null);
   const pickedRef = useRef<ElementSnapshot | null>(null);
   pickedRef.current = picked;
@@ -134,8 +155,9 @@ export function DesignPreviewWorkbench({
   const commentRequestRef = useRef(0);
   const [pickedPreview, setPickedPreview] = useState<string | null>(null);
   const [commentText, setCommentText] = useState("");
-  const [property, setProperty] = useState("text");
-  const [value, setValue] = useState("");
+  const [elementDraft, setElementDraft] = useState<ElementDraft | null>(null);
+  const elementSavingRef = useRef(false);
+  const [elementSaving, setElementSaving] = useState(false);
   const [capture, setCapture] = useState<string | null>(null);
   const resultImageRef = useRef<string | null>(null);
   const resultAnnotationsRef = useRef<Annotation[]>([]);
@@ -300,7 +322,7 @@ export function DesignPreviewWorkbench({
       const showPicked = (preview: string | null) => {
         if (liveRef.current !== generation || elementSelectionRef.current !== selection || latestRef.current.targetKey !== selectedTarget) return;
         setPickedPreview(preview);
-        setPicked(snapshot); setProperty("text"); setValue(snapshot.text);
+        setPicked(snapshot); setElementDraft(elementDraftOf(snapshot));
       };
       setPicker(false);
       void requestCapture("viewport-no-copy").then((result) => {
@@ -339,7 +361,7 @@ export function DesignPreviewWorkbench({
     setPickerPurpose(next ? purpose : null);
     if (next) {
       elementSelectionRef.current += 1;
-      setPicked(null); setPickedPreview(null); setCommentText("");
+      setPicked(null); setPickedPreview(null); setElementDraft(null); setCommentText("");
     }
     setStatus(next ? t(purpose === "comment" ? "design.preview.commentHint" : "design.preview.editHint") : "");
     pickerCommandRef.current = pickerCommandRef.current
@@ -474,47 +496,62 @@ export function DesignPreviewWorkbench({
     }
     finally { feedbackSendingRef.current = false; setFeedbackSending(false); }
   };
-  const refreshPickedPreview = async (selected: ElementSnapshot) => {
-    const request = ++pickedPreviewRequestRef.current;
-    const selectedTarget = latestRef.current.targetKey;
-    const isCurrent = () => pickedPreviewRequestRef.current === request && pickedRef.current === selected && latestRef.current.targetKey === selectedTarget;
-    try {
-      const result = await requestCapture("viewport-no-copy");
-      if (isCurrent()) setPickedPreview(result.dataUrl);
-    } catch (error) {
-      if (isCurrent()) throw error;
-    }
-  };
   const dismissPicked = () => {
     pickedPreviewRequestRef.current += 1;
     setPicked(null);
     setPickedPreview(null);
+    setElementDraft(null);
   };
-  const applyEdit = async () => {
-    if (!picked) return;
-    const selected = picked;
+  const saveElement = async () => {
+    if (!picked || !elementDraft || elementSavingRef.current) return;
+    const original = elementDraftOf(picked);
+    const edits = (["text", ...Object.keys(EMPTY_ELEMENT_STYLES)] as ("text" | StyleProperty)[])
+      .filter((name) => elementDraft[name] !== original[name])
+      .map((name) => ({ selector: picked.selector, property: name, value: elementDraft[name] }));
+    let applied = 0;
+    elementSavingRef.current = true;
+    setElementSaving(true);
     try {
-      await previewElementApply({ selector: selected.selector, property, value: property === "delete" ? "" : value });
+      for (const edit of edits) {
+        await previewElementApply(edit);
+        applied += 1;
+      }
     } catch (error) {
-      report(error);
+      try {
+        while (applied > 0) {
+          await previewElementUndo();
+          applied -= 1;
+        }
+        report(error);
+      } catch (rollbackError) {
+        report(new Error(`${error instanceof Error ? error.message : String(error)}; rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`));
+      }
       return;
+    } finally {
+      elementSavingRef.current = false;
+      setElementSaving(false);
     }
     setStatus(t("design.preview.applied"));
-    try { await refreshPickedPreview(selected); }
-    catch { dismissPicked(); }
+    dismissPicked();
   };
-  const undoEdit = async () => {
-    if (!picked) return;
-    const selected = picked;
+  const deleteElement = async () => {
+    if (!picked || elementSavingRef.current) return;
+    elementSavingRef.current = true;
+    setElementSaving(true);
     try {
-      await previewElementUndo();
+      await previewElementApply({ selector: picked.selector, property: "delete", value: "" });
     } catch (error) {
       report(error);
       return;
+    } finally {
+      elementSavingRef.current = false;
+      setElementSaving(false);
     }
-    setStatus("");
-    try { await refreshPickedPreview(selected); }
-    catch { dismissPicked(); }
+    setStatus(t("design.preview.applied"));
+    dismissPicked();
+  };
+  const updateElementDraft = (property: "text" | StyleProperty, value: string) => {
+    setElementDraft((draft) => draft ? { ...draft, [property]: value } : draft);
   };
   const selectedPreviewPosition = (() => {
     const hostRect = hostRef.current?.getBoundingClientRect();
@@ -535,30 +572,6 @@ export function DesignPreviewWorkbench({
   const selectedElementDialogLeft = Math.max(12, overlayWidth > 0
     ? Math.min(selectedElementPosition.left, overlayWidth - selectedElementDialogWidth - 12)
     : selectedElementPosition.left);
-  const propertyOptions = [
-    ["text", t("design.preview.property.text")],
-    ["color", t("design.preview.property.color")],
-    ["backgroundColor", t("design.preview.property.background")],
-    ["fontSize", t("design.preview.property.fontSize")],
-    ["opacity", t("design.preview.property.opacity")],
-    ["borderRadius", t("design.preview.property.borderRadius")],
-    ["delete", t("design.preview.property.delete")],
-  ] as const;
-  const propertyLabel = propertyOptions.find(([name]) => name === property)?.[1] ?? propertyOptions[0][1];
-  const selectProperty = (name: typeof propertyOptions[number][0]) => {
-    setProperty(name);
-    setValue(name === "text" ? picked?.text ?? "" : "");
-  };
-  const moveProperty = (offset: number) => {
-    const current = propertyOptions.findIndex(([name]) => name === property);
-    const next = (current + offset + propertyOptions.length) % propertyOptions.length;
-    selectProperty(propertyOptions[next]![0]);
-  };
-  const focusPropertyOption = (button: HTMLButtonElement, offset: number) => {
-    const options = Array.from(propertyMenuRef.current?.querySelectorAll<HTMLButtonElement>("[data-property-option]") ?? []);
-    const current = options.indexOf(button);
-    options[(current + offset + options.length) % options.length]?.focus();
-  };
 
   return (
     <aside ref={paneRef} aria-label={t("design.preview.workbench")} style={{ width: paneWidth }} className="relative flex min-w-80 shrink-0 flex-col border-s border-base-300 bg-base-100">
@@ -650,7 +663,7 @@ export function DesignPreviewWorkbench({
                   <strong className="block truncate rounded-field bg-primary/10 px-1.5 py-0.5 font-mono text-xs font-medium text-primary" title={picked.selector}>{picked.tag} · {picked.selector}</strong>
                 </div>
               </div>
-              <button aria-label={t("design.preview.close")} className="btn btn-ghost btn-square btn-xs -me-1 -mt-1 hover:bg-primary/10 hover:text-primary" onClick={dismissPicked}><IconX size={14} /></button>
+              <button aria-label={t("design.preview.close")} className="btn btn-ghost btn-square btn-xs -me-1 -mt-1 hover:bg-primary/10 hover:text-primary" disabled={elementSaving} onClick={dismissPicked}><IconX size={14} /></button>
             </div>
             <dl className="mt-3 grid grid-cols-[3.5rem_minmax(0,1fr)] gap-x-2 gap-y-1.5 rounded-box border border-base-300 bg-base-200/60 px-3 py-2.5 text-xs">
               <dt className="text-base-content/50">{t("design.preview.elementSize")}</dt>
@@ -664,55 +677,101 @@ export function DesignPreviewWorkbench({
                 <textarea autoFocus aria-label={t("design.preview.commentContent")} placeholder={t("design.preview.commentPlaceholder")} className="textarea mt-1.5 min-h-24 w-full resize-none border-base-300 bg-base-100 text-sm leading-5 transition-[border-color,box-shadow] placeholder:text-base-content/35 focus:border-primary focus:outline-none focus:shadow-[0_0_0_3px_color-mix(in_oklab,var(--color-primary)_15%,transparent)]" value={commentText} onChange={(e) => setCommentText(e.target.value)} />
               </label>
               <div className="mt-3 flex justify-end border-t border-base-300 pt-3"><button className="btn btn-primary btn-sm min-w-28" disabled={feedbackSending || !commentText.trim()} onClick={() => void submitElementComment()}><IconSend size={14} /> {t("design.preview.sendComment")}</button></div>
-            </> : <>
-              <details ref={propertyMenuRef} className="dropdown mt-3 w-full">
-                <summary
-                  aria-label={`${t("design.preview.elementProperty")}: ${propertyLabel}`}
-                  aria-haspopup="listbox"
-                  className="btn h-10 min-h-10 w-full justify-between border-base-300 bg-base-100 px-3 font-normal shadow-none hover:border-primary/40 hover:bg-base-200/60"
-                  onKeyDown={(event) => {
-                    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-                    event.preventDefault();
-                    moveProperty(event.key === "ArrowDown" ? 1 : -1);
-                  }}
-                >
-                  <span className="truncate">{propertyLabel}</span>
-                  <IconChevronDown size={15} stroke={1.75} className="shrink-0 text-base-content/50" />
-                </summary>
-                <ul role="listbox" aria-label={t("design.preview.elementProperty")} className="menu dropdown-content z-20 mt-1 max-h-56 w-full flex-nowrap overflow-auto rounded-box border border-base-300 bg-base-100 p-1.5 shadow-xl">
-                  {propertyOptions.map(([name, label]) => <li key={name}>
-                    <button
-                      data-property-option={name}
-                      role="option"
-                      aria-selected={property === name}
-                      tabIndex={property === name ? 0 : -1}
-                      className={`min-h-8 justify-between rounded-field px-2.5 text-xs ${property === name ? "menu-active font-medium" : ""}`}
-                      onClick={() => {
-                        selectProperty(name);
-                        propertyMenuRef.current?.removeAttribute("open");
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key === "Escape") {
-                          propertyMenuRef.current?.removeAttribute("open");
-                          propertyMenuRef.current?.querySelector("summary")?.focus();
-                        } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-                          event.preventDefault();
-                          focusPropertyOption(event.currentTarget, event.key === "ArrowDown" ? 1 : -1);
-                        } else if (event.key === "Home" || event.key === "End") {
-                          event.preventDefault();
-                          const options = propertyMenuRef.current?.querySelectorAll<HTMLButtonElement>("[data-property-option]");
-                          options?.[event.key === "Home" ? 0 : options.length - 1]?.focus();
-                        }
-                      }}
-                    >
-                      <span>{label}</span>
-                      {property === name && <IconCheck size={14} stroke={2} className="text-primary" />}
-                    </button>
-                  </li>)}
-                </ul>
-              </details>
-              {property !== "delete" && <textarea aria-label={t("design.preview.elementValue")} className="textarea textarea-sm mt-2 w-full" value={value} onChange={(e) => setValue(e.target.value)} />}
-              <div className="mt-2 flex gap-2"><button className="btn btn-primary btn-sm" onClick={() => void applyEdit()}>{t("design.preview.apply")}</button><button className="btn btn-ghost btn-sm" onClick={() => void undoEdit()}><IconArrowBackUp size={14} /> {t("design.preview.undo")}</button></div>
+            </> : elementDraft && <>
+              <section className="mt-3">
+                <label className="block text-[10px] font-medium uppercase tracking-wide text-base-content/55">
+                  {t("design.preview.section.content")}
+                  <textarea aria-label={t("design.preview.elementText")} className="textarea textarea-sm mt-1.5 min-h-20 w-full resize-y font-mono text-xs" value={elementDraft.text} onChange={(e) => updateElementDraft("text", e.target.value)} />
+                </label>
+              </section>
+              <section className="mt-3 border-t border-base-300 pt-3">
+                <h3 className="text-[10px] font-medium uppercase tracking-wide text-base-content/55">{t("design.preview.section.size")}</h3>
+                <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                  {(["width", "height"] as const).map((name) => <label key={name} className="input input-xs flex min-w-0 items-center gap-1 px-2 text-[10px] text-base-content/50">
+                    <span>{t(`design.preview.property.${name}` as MessageKey)}</span>
+                    <input aria-label={t(`design.preview.property.${name}` as MessageKey)} className="min-w-0 flex-1 text-right text-xs text-base-content" value={elementDraft[name]} onChange={(e) => updateElementDraft(name, e.target.value)} />
+                  </label>)}
+                </div>
+              </section>
+              <section className="mt-3 border-t border-base-300 pt-3">
+                <h3 className="text-[10px] font-medium uppercase tracking-wide text-base-content/55">{t("design.preview.section.layout")}</h3>
+                <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                  {(["justifyContent", "alignItems"] as const).map((name) => {
+                    const options = name === "justifyContent" ? ["normal", "flex-start", "center", "flex-end", "space-between", "space-around", "space-evenly"] : ["normal", "stretch", "flex-start", "center", "flex-end", "baseline"];
+                    return <label key={name} className="select select-xs flex min-w-0 items-center gap-1 px-2 text-[10px] text-base-content/50">
+                      <span>{t(`design.preview.property.${name}` as MessageKey)}</span>
+                      <select aria-label={t(`design.preview.property.${name}` as MessageKey)} className="min-w-0 flex-1 text-right text-xs text-base-content" value={elementDraft[name]} onChange={(e) => updateElementDraft(name, e.target.value)}>
+                        {!options.includes(elementDraft[name]) && <option value={elementDraft[name]}>{elementDraft[name] || "—"}</option>}
+                        {options.map((option) => <option key={option} value={option}>{option}</option>)}
+                      </select>
+                    </label>;
+                  })}
+                </div>
+              </section>
+              <section className="mt-3 border-t border-base-300 pt-3">
+                <h3 className="text-[10px] font-medium uppercase tracking-wide text-base-content/55">{t("design.preview.section.box")}</h3>
+                <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                  {(["backgroundColor", "opacity"] as const).map((name) => <label key={name} className="input input-xs flex min-w-0 items-center gap-1 px-2 text-[10px] text-base-content/50">
+                    <span>{t(`design.preview.property.${name}` as MessageKey)}</span>
+                    <input aria-label={t(`design.preview.property.${name}` as MessageKey)} className="min-w-0 flex-1 text-right text-xs text-base-content" value={elementDraft[name]} onChange={(e) => updateElementDraft(name, e.target.value)} />
+                  </label>)}
+                </div>
+              </section>
+              <section className="mt-3">
+                <h3 className="text-xs font-medium text-base-content/65">{t("design.preview.section.style")}</h3>
+                <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                  {(["color", "fontSize"] as const).map((name) => <label key={name} className="input input-xs flex min-w-0 items-center gap-1 px-2 text-[10px] text-base-content/50">
+                    <span>{t(`design.preview.property.${name}` as MessageKey)}</span>
+                    <input aria-label={t(`design.preview.property.${name}` as MessageKey)} className="min-w-0 flex-1 text-right text-xs text-base-content" value={elementDraft[name]} onChange={(e) => updateElementDraft(name, e.target.value)} />
+                  </label>)}
+                </div>
+              </section>
+              {(["padding", "margin"] as const).map((group) => <section key={group} className="mt-3">
+                <h3 className="text-xs font-medium text-base-content/65">{t(`design.preview.section.${group}` as MessageKey)}</h3>
+                <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                  {(["Top", "Right", "Bottom", "Left"] as const).map((side) => {
+                    const name = `${group}${side}` as StyleProperty;
+                    return <label key={name} className="input input-xs flex min-w-0 items-center gap-1 px-2 text-[10px] text-base-content/50">
+                      <span>{side[0]}</span>
+                      <input aria-label={`${t(`design.preview.section.${group}` as MessageKey)} ${side}`} className="min-w-0 flex-1 text-right text-xs text-base-content" value={elementDraft[name]} onChange={(e) => updateElementDraft(name, e.target.value)} />
+                    </label>;
+                  })}
+                </div>
+              </section>)}
+              <section className="mt-3">
+                <h3 className="text-xs font-medium text-base-content/65">{t("design.preview.section.border")}</h3>
+                <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                  {(["Top", "Right", "Bottom", "Left"] as const).map((side) => {
+                    const name = `border${side}Width` as StyleProperty;
+                    return <label key={name} className="input input-xs flex min-w-0 items-center gap-1 px-2 text-[10px] text-base-content/50">
+                      <span>{side[0]}</span>
+                      <input aria-label={`${t("design.preview.section.border")} ${side}`} className="min-w-0 flex-1 text-right text-xs text-base-content" value={elementDraft[name]} onChange={(e) => updateElementDraft(name, e.target.value)} />
+                    </label>;
+                  })}
+                </div>
+                <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                  <label className="select select-xs flex min-w-0 items-center gap-1 px-2 text-[10px] text-base-content/50">
+                    <span>{t("design.preview.property.borderStyle")}</span>
+                    <select aria-label={t("design.preview.property.borderStyle")} className="min-w-0 flex-1 text-right text-xs text-base-content" value={elementDraft.borderStyle} onChange={(e) => updateElementDraft("borderStyle", e.target.value)}>
+                      {!(["none", "solid", "dashed", "dotted", "double"] as string[]).includes(elementDraft.borderStyle) && <option value={elementDraft.borderStyle}>{elementDraft.borderStyle || "—"}</option>}
+                      {(["none", "solid", "dashed", "dotted", "double"] as const).map((option) => <option key={option} value={option}>{option}</option>)}
+                    </select>
+                  </label>
+                  <label className="input input-xs flex min-w-0 items-center gap-1 px-2 text-[10px] text-base-content/50">
+                    <span>{t("design.preview.property.borderColor")}</span>
+                    <input aria-label={t("design.preview.property.borderColor")} className="min-w-0 flex-1 text-right text-xs text-base-content" value={elementDraft.borderColor} onChange={(e) => updateElementDraft("borderColor", e.target.value)} />
+                  </label>
+                </div>
+                <label className="input input-xs mt-1.5 flex items-center gap-1 px-2 text-[10px] text-base-content/50">
+                  <span>{t("design.preview.property.borderRadius")}</span>
+                  <input aria-label={t("design.preview.property.borderRadius")} className="min-w-0 flex-1 text-right text-xs text-base-content" value={elementDraft.borderRadius} onChange={(e) => updateElementDraft("borderRadius", e.target.value)} />
+                </label>
+              </section>
+              <div className="sticky -bottom-4 mt-3 flex items-center gap-1 border-t border-base-300 bg-base-100 py-3">
+                <button aria-label={t("design.preview.property.delete")} className="btn btn-ghost btn-square btn-sm text-error" disabled={elementSaving} onClick={() => void deleteElement()}><IconTrash size={15} /></button>
+                <button className="btn btn-ghost btn-sm ms-auto" disabled={elementSaving} onClick={dismissPicked}>{t("design.preview.cancel")}</button>
+                <button className="btn btn-primary btn-sm min-w-16" disabled={elementSaving} onClick={() => void saveElement()}>{t("design.preview.save")}</button>
+              </div>
             </>}
           </div>
           </div>

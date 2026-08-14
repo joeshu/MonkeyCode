@@ -15,16 +15,18 @@ let deferCreates: boolean;
 let deferPickerToggles: boolean;
 let deferCaptures: boolean;
 let captureError: string | null;
+let applyFailureProperty: string | null;
 
 beforeEach(() => {
   setLocale("en");
-  calls = []; events = new Map(); pendingCreates = []; pendingPickerToggles = []; deferCreates = false; deferPickerToggles = false; deferCaptures = false; captureError = null;
+  calls = []; events = new Map(); pendingCreates = []; pendingPickerToggles = []; deferCreates = false; deferPickerToggles = false; deferCaptures = false; captureError = null; applyFailureProperty = null;
   vi.mocked(composer.sendWithFiles).mockReset().mockResolvedValue(true);
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ x: 400, y: 80, left: 400, top: 80, right: 1000, bottom: 480, width: 600, height: 400, toJSON() {} });
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   (window as unknown as { __TAURI__: unknown }).__TAURI__ = {
     core: { invoke: async (cmd: string, args?: Record<string, unknown>) => {
       calls.push({ cmd, args });
+      if (cmd === "preview_element_apply" && (args?.edit as { property?: string } | undefined)?.property === applyFailureProperty) throw new Error("invalid style");
       if ((cmd === "preview_create" || cmd === "preview_create_artifact") && deferCreates) await new Promise<void>((resolve) => pendingCreates.push(resolve));
       if (cmd === "preview_picker_toggle" && deferPickerToggles) await new Promise<void>((resolve) => pendingPickerToggles.push(resolve));
       if (cmd === "preview_serialize") queueMicrotask(() => events.get("preview-serialized")?.({ payload: { requestId: args?.requestId, html: "<html>serialized</html>" } }));
@@ -273,7 +275,7 @@ describe("DesignPreviewWorkbench native lifecycle", () => {
     act(() => events.get("preview-element-picked")?.({ payload: { selector: "#hero", text: "Hello", tag: "DIV", bounds: { x: 0, y: 0, width: 10, height: 10 }, styles: {} } }));
 
     const panel = await screen.findByRole("dialog", { name: "Selected element" });
-    expect(within(panel).getByRole("button", { name: "Apply" })).toBeTruthy();
+    expect(within(panel).getByRole("button", { name: "Save" })).toBeTruthy();
     expect(panel.parentElement?.querySelector("img")).toBeNull();
     expect(screen.getByRole("status").textContent).toContain("snapshot failed");
   });
@@ -405,80 +407,88 @@ describe("DesignPreviewWorkbench native lifecycle", () => {
     expect(panel.style.left).toContain("236px");
   });
 
-  it("uses backend picker apply and undo actions", async () => {
+  it("edits grouped element styles and saves only changed values", async () => {
     mount();
     await userEvent.click(screen.getByRole("button", { name: /Edit/ }));
     expect(calls.some((c) => c.cmd === "preview_picker_toggle" && c.args?.enabled === true)).toBe(true);
     await waitFor(() => expect(events.has("preview-element-picked")).toBe(true));
-    act(() => {
-      events.get("preview-element-picked")?.({ payload: { selector: "#hero", text: "Hello", tag: "DIV", bounds: { x: 0, y: 0, width: 10, height: 10 }, styles: {} } });
-    });
-    expect(await screen.findByText(/DIV · #hero/)).toBeTruthy();
-    const propertyPicker = screen.getByLabelText("Element property: Text");
-    expect(propertyPicker.tagName).toBe("SUMMARY");
-    propertyPicker.focus();
-    await userEvent.keyboard("{ArrowDown}");
-    expect(screen.getByLabelText("Element property: Text color")).toBeTruthy();
-    await userEvent.keyboard("{ArrowUp}");
-    expect(screen.getByLabelText("Element property: Text")).toBeTruthy();
-    await userEvent.click(propertyPicker);
-    expect(screen.getByRole("option", { name: "Background color" })).toBeTruthy();
-    await userEvent.click(propertyPicker);
-    await userEvent.clear(screen.getByLabelText("Property value"));
-    await userEvent.type(screen.getByLabelText("Property value"), "Updated");
-    await userEvent.click(screen.getByRole("button", { name: "Apply" }));
-    await waitFor(() => expect(calls.some((c) => c.cmd === "preview_element_apply" && (c.args?.edit as { value?: string }).value === "Updated")).toBe(true));
-    await waitFor(() => expect(calls.filter((c) => c.cmd === "preview_capture" && c.args?.mode === "viewport-no-copy")).toHaveLength(2));
-    await userEvent.click(screen.getByRole("button", { name: /Undo/ }));
-    expect(calls.some((c) => c.cmd === "preview_element_undo")).toBe(true);
-    await waitFor(() => expect(calls.filter((c) => c.cmd === "preview_capture" && c.args?.mode === "viewport-no-copy")).toHaveLength(3));
-  });
-
-  it("keeps the newest preview when older edit captures finish later", async () => {
-    mount();
-    await userEvent.click(screen.getByRole("button", { name: /Edit/ }));
-    await waitFor(() => expect(events.has("preview-element-picked")).toBe(true));
-    act(() => events.get("preview-element-picked")?.({ payload: { selector: "#hero", text: "Hello", tag: "DIV", bounds: { x: 0, y: 0, width: 10, height: 10 }, styles: {} } }));
+    act(() => events.get("preview-element-picked")?.({ payload: {
+      selector: "#hero", text: "Hello", tag: "DIV", bounds: { x: 0, y: 0, width: 516.5, height: 46 },
+      styles: { width: "516.5px", height: "46px", justifyContent: "normal", alignItems: "normal", backgroundColor: "rgba(0, 0, 0, 0)", opacity: "1", paddingTop: "0px", borderStyle: "none", borderColor: "rgb(0, 0, 0)", borderRadius: "0px" },
+    } }));
     const panel = await screen.findByRole("dialog", { name: "Selected element" });
-    deferCaptures = true;
 
-    await userEvent.click(within(panel).getByRole("button", { name: "Apply" }));
-    await waitFor(() => expect(calls.filter((call) => call.cmd === "preview_capture")).toHaveLength(2));
-    await userEvent.click(within(panel).getByRole("button", { name: /Undo/ }));
-    await waitFor(() => expect(calls.filter((call) => call.cmd === "preview_capture")).toHaveLength(3));
-    const [, applyCapture, undoCapture] = calls.filter((call) => call.cmd === "preview_capture");
-
-    act(() => events.get("preview-captured")?.({ payload: { requestId: undoCapture!.args?.requestId, dataUrl: "data:image/png;base64,UNDO" } }));
-    await waitFor(() => expect(panel.parentElement?.querySelector("img")?.getAttribute("src")).toBe("data:image/png;base64,UNDO"));
-    act(() => events.get("preview-capture-error")?.({ payload: { requestId: applyCapture!.args?.requestId, error: "old capture failed" } }));
-    expect(screen.getByRole("dialog", { name: "Selected element" })).toBeTruthy();
-    expect(panel.parentElement?.querySelector("img")?.getAttribute("src")).toBe("data:image/png;base64,UNDO");
-
-    await userEvent.click(within(panel).getByRole("button", { name: "Apply" }));
-    await waitFor(() => expect(calls.filter((call) => call.cmd === "preview_capture")).toHaveLength(4));
-    await userEvent.click(within(panel).getByRole("button", { name: /Undo/ }));
-    await waitFor(() => expect(calls.filter((call) => call.cmd === "preview_capture")).toHaveLength(5));
-    const [, , , olderCapture, newestCapture] = calls.filter((call) => call.cmd === "preview_capture");
-    act(() => events.get("preview-captured")?.({ payload: { requestId: newestCapture!.args?.requestId, dataUrl: "data:image/png;base64,NEWEST" } }));
-    await waitFor(() => expect(panel.parentElement?.querySelector("img")?.getAttribute("src")).toBe("data:image/png;base64,NEWEST"));
-    act(() => events.get("preview-captured")?.({ payload: { requestId: olderCapture!.args?.requestId, dataUrl: "data:image/png;base64,OLDER" } }));
-    expect(panel.parentElement?.querySelector("img")?.getAttribute("src")).toBe("data:image/png;base64,NEWEST");
-  });
-
-  it("reveals the applied page when refreshing its static preview fails", async () => {
-    mount();
-    await userEvent.click(screen.getByRole("button", { name: /Edit/ }));
-    await waitFor(() => expect(events.has("preview-element-picked")).toBe(true));
-    act(() => events.get("preview-element-picked")?.({ payload: { selector: "#hero", text: "Hello", tag: "DIV", bounds: { x: 0, y: 0, width: 10, height: 10 }, styles: {} } }));
-    const panel = await screen.findByRole("dialog", { name: "Selected element" });
-    captureError = "capture failed";
-
-    await userEvent.click(within(panel).getByRole("button", { name: "Apply" }));
+    expect((within(panel).getByLabelText("Width") as HTMLInputElement).value).toBe("516.5px");
+    await userEvent.clear(within(panel).getByLabelText("Width"));
+    await userEvent.type(within(panel).getByLabelText("Width"), "640px");
+    await userEvent.selectOptions(within(panel).getByLabelText("Justify"), "space-between");
+    await userEvent.clear(within(panel).getByLabelText("Padding Top"));
+    await userEvent.type(within(panel).getByLabelText("Padding Top"), "12px");
+    await userEvent.clear(within(panel).getByLabelText("Fill"));
+    await userEvent.type(within(panel).getByLabelText("Fill"), "#ffffff");
+    await userEvent.selectOptions(within(panel).getByLabelText("Style"), "solid");
+    await userEvent.clear(within(panel).getByLabelText("Radius"));
+    await userEvent.type(within(panel).getByLabelText("Radius"), "8px");
+    await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Selected element" })).toBeNull());
-    expect(screen.getByRole("status").textContent).toContain("Applied in preview.");
-    expect(calls.some((call) => call.cmd === "preview_element_apply")).toBe(true);
-    await waitFor(() => expect(calls.some((call) => call.cmd === "preview_show")).toBe(true));
+    const edits = calls.filter((c) => c.cmd === "preview_element_apply").map((c) => c.args?.edit);
+    expect(edits).toEqual([
+      { selector: "#hero", property: "backgroundColor", value: "#ffffff" },
+      { selector: "#hero", property: "width", value: "640px" },
+      { selector: "#hero", property: "justifyContent", value: "space-between" },
+      { selector: "#hero", property: "paddingTop", value: "12px" },
+      { selector: "#hero", property: "borderStyle", value: "solid" },
+      { selector: "#hero", property: "borderRadius", value: "8px" },
+    ]);
+  });
+
+  it("rolls back earlier edits when a later edit fails", async () => {
+    mount();
+    await userEvent.click(screen.getByRole("button", { name: /Edit/ }));
+    await waitFor(() => expect(events.has("preview-element-picked")).toBe(true));
+    act(() => events.get("preview-element-picked")?.({ payload: {
+      selector: "#hero", text: "Hello", tag: "DIV", bounds: { x: 0, y: 0, width: 100, height: 20 },
+      styles: { backgroundColor: "transparent", width: "100px" },
+    } }));
+    const panel = await screen.findByRole("dialog", { name: "Selected element" });
+    await userEvent.clear(within(panel).getByLabelText("Fill"));
+    await userEvent.type(within(panel).getByLabelText("Fill"), "#ffffff");
+    await userEvent.clear(within(panel).getByLabelText("Width"));
+    await userEvent.type(within(panel).getByLabelText("Width"), "100px;");
+    applyFailureProperty = "width";
+
+    await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(calls.some((call) => call.cmd === "preview_element_undo")).toBe(true));
+    expect(calls.filter((call) => call.cmd === "preview_element_apply").map((call) => (call.args?.edit as { property?: string }).property)).toEqual(["backgroundColor", "width"]);
+    expect(screen.getByRole("dialog", { name: "Selected element" })).toBeTruthy();
+    expect((within(panel).getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("cancels element style drafts without applying them", async () => {
+    mount();
+    await userEvent.click(screen.getByRole("button", { name: /Edit/ }));
+    await waitFor(() => expect(events.has("preview-element-picked")).toBe(true));
+    act(() => events.get("preview-element-picked")?.({ payload: { selector: "#hero", text: "Hello", tag: "DIV", bounds: { x: 0, y: 0, width: 10, height: 10 }, styles: {} } }));
+    const panel = await screen.findByRole("dialog", { name: "Selected element" });
+    await userEvent.clear(within(panel).getByLabelText("Width"));
+    await userEvent.type(within(panel).getByLabelText("Width"), "20px");
+    await userEvent.click(within(panel).getByRole("button", { name: "Cancel" }));
+
+    expect(calls.some((c) => c.cmd === "preview_element_apply")).toBe(false);
+    expect(screen.queryByRole("dialog", { name: "Selected element" })).toBeNull();
+  });
+
+  it("deletes an element from the editor footer", async () => {
+    mount();
+    await userEvent.click(screen.getByRole("button", { name: /Edit/ }));
+    await waitFor(() => expect(events.has("preview-element-picked")).toBe(true));
+    act(() => events.get("preview-element-picked")?.({ payload: { selector: "#hero", text: "Hello", tag: "DIV", bounds: { x: 0, y: 0, width: 10, height: 10 }, styles: {} } }));
+    await userEvent.click(await screen.findByRole("button", { name: "Delete element" }));
+
+    await waitFor(() => expect(calls.some((c) => c.cmd === "preview_element_apply" && (c.args?.edit as { property?: string }).property === "delete")).toBe(true));
+    expect(screen.queryByRole("dialog", { name: "Selected element" })).toBeNull();
   });
 
   it("toggles marking off and hides its toolbar when Mark is clicked again", async () => {

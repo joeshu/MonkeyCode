@@ -269,6 +269,8 @@ pub struct ElementStyles {
     opacity: String,
     width: String,
     height: String,
+    justify_content: String,
+    align_items: String,
     padding_top: String,
     padding_right: String,
     padding_bottom: String,
@@ -419,7 +421,7 @@ let hoverFrame=0,pendingHover=null,cursorBefore=null;
 const stopHoverFrame=()=>{if(hoverFrame)cancelAnimationFrame(hoverFrame);hoverFrame=0;pendingHover=null};
 const setActive=(on)=>{if(on&&!S.active){const style=document.documentElement.style;cursorBefore=[style.getPropertyValue('cursor'),style.getPropertyPriority('cursor')];style.setProperty('cursor','crosshair','important')}else if(!on&&S.active){const style=document.documentElement.style;if(cursorBefore)restoreProperty(style,'cursor',cursorBefore[0],cursorBefore[1]);cursorBefore=null;stopHoverFrame()}S.active=on;if(!on){outline(S.hover,false);S.hover=null}};
 addEventListener('pointermove',e=>{if(!S.active)return;pendingHover={root:eventTarget(e),x:e.clientX,y:e.clientY};if(hoverFrame)return;hoverFrame=requestAnimationFrame(()=>{hoverFrame=0;const point=pendingHover;pendingHover=null;if(S.active&&point)updateHover(point.root,point.x,point.y)})},true);
-addEventListener('click',e=>{if(!S.active)return;e.preventDefault();e.stopImmediatePropagation();stopHoverFrame();updateHover(eventTarget(e),e.clientX,e.clientY);const el=S.hover;outline(el,false);S.hover=null;setActive(false);S.selected=el;if(!el)return;const r=el.getBoundingClientRect(),c=getComputedStyle(el);const data={selector:selector(el),text:(el.textContent||'').slice(0,16384),tag:el.tagName.toLowerCase(),bounds:{x:r.x,y:r.y,width:r.width,height:r.height},styles:{color:c.color,backgroundColor:c.backgroundColor,fontSize:c.fontSize,opacity:c.opacity,width:c.width,height:c.height,paddingTop:c.paddingTop,paddingRight:c.paddingRight,paddingBottom:c.paddingBottom,paddingLeft:c.paddingLeft,marginTop:c.marginTop,marginRight:c.marginRight,marginBottom:c.marginBottom,marginLeft:c.marginLeft,borderTopWidth:c.borderTopWidth,borderRightWidth:c.borderRightWidth,borderBottomWidth:c.borderBottomWidth,borderLeftWidth:c.borderLeftWidth,borderStyle:c.borderStyle,borderColor:c.borderColor,borderRadius:c.borderRadius}};location.href='monkeycode-picker://result?data='+encodeURIComponent(JSON.stringify(data))},true);
+addEventListener('click',e=>{if(!S.active)return;e.preventDefault();e.stopImmediatePropagation();stopHoverFrame();updateHover(eventTarget(e),e.clientX,e.clientY);const el=S.hover;outline(el,false);S.hover=null;setActive(false);S.selected=el;if(!el)return;const r=el.getBoundingClientRect(),c=getComputedStyle(el);const data={selector:selector(el),text:(el.textContent||'').slice(0,16384),tag:el.tagName.toLowerCase(),bounds:{x:r.x,y:r.y,width:r.width,height:r.height},styles:{color:c.color,backgroundColor:c.backgroundColor,fontSize:c.fontSize,opacity:c.opacity,width:c.width,height:c.height,justifyContent:c.justifyContent,alignItems:c.alignItems,paddingTop:c.paddingTop,paddingRight:c.paddingRight,paddingBottom:c.paddingBottom,paddingLeft:c.paddingLeft,marginTop:c.marginTop,marginRight:c.marginRight,marginBottom:c.marginBottom,marginLeft:c.marginLeft,borderTopWidth:c.borderTopWidth,borderRightWidth:c.borderRightWidth,borderBottomWidth:c.borderBottomWidth,borderLeftWidth:c.borderLeftWidth,borderStyle:c.borderStyle,borderColor:c.borderColor,borderRadius:c.borderRadius}};location.href='monkeycode-picker://result?data='+encodeURIComponent(JSON.stringify(data))},true);
 S.toggle=setActive;
 S.apply=(edit)=>{const el=document.querySelector(edit.selector);if(!el)throw Error('元素已不存在');const prop=edit.property;if(prop==='delete'){const parent=el.parentNode,next=el.nextSibling;S.undo.push({el,prop,parent,next});el.remove();return}const before=prop==='text'?el.textContent:el.style[prop];S.undo.push({el,prop,before});if(prop==='text')el.textContent=edit.value;else el.style[prop]=edit.value};
 S.undoOne=()=>{const x=S.undo.pop();if(!x)return false;if(x.prop==='delete'){x.parent.insertBefore(x.el,x.next);return true}if(x.prop==='text')x.el.textContent=x.before;else x.el.style[x.prop]=x.before;return true}
@@ -663,6 +665,8 @@ pub fn preview_element_apply(app: AppHandle, edit: ElementEdit) -> Result<(), St
                 "opacity",
                 "width",
                 "height",
+                "justifyContent",
+                "alignItems",
                 "paddingTop",
                 "paddingRight",
                 "paddingBottom",

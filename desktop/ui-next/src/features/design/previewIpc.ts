@@ -6,6 +6,7 @@ export interface PreviewBounds { x: number; y: number; width: number; height: nu
 export interface ElementBounds { x: number; y: number; width: number; height: number }
 export interface ElementStyles {
   color: string; backgroundColor: string; fontSize: string; opacity: string; width: string; height: string;
+  justifyContent: string; alignItems: string;
   paddingTop: string; paddingRight: string; paddingBottom: string; paddingLeft: string;
   marginTop: string; marginRight: string; marginBottom: string; marginLeft: string;
   borderTopWidth: string; borderRightWidth: string; borderBottomWidth: string; borderLeftWidth: string;
