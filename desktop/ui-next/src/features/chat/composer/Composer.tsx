@@ -4,7 +4,7 @@
 // 发送面契约见 useComposer 文件头;切模型/思考/模式经 lib/ipc/controls
 // (session_call),成功不乐观回写——壳会补 model_update / think_update /
 // permission_mode_update 帧,ChatState 是唯一真值。
-import { IconClock, IconFolder, IconPaperclip, IconSend, IconX } from "@tabler/icons-react";
+import { IconFolder, IconPaperclip, IconSend, IconX } from "@tabler/icons-react";
 import {
   useCallback,
   useEffect,
@@ -28,6 +28,7 @@ import { fmtK } from "@/lib/util/fmt";
 import { commandText, createImeGuard, cycleIndex, filterCommands, slashQuery } from "@/lib/util/slash";
 import { ComposerCard, ComposerTextarea, ErrorBar, RunBar, SlashPanel, UsageRing } from "./composerKit";
 import { ModelMenu, ThinkMenu } from "./pickers";
+import { QueuePanel } from "./QueuePanel";
 import type { ComposerCtl } from "./useComposer";
 
 // 模型/思考档下拉的形态与逻辑收口在 ./pickers(新建任务页共用同一组件);
@@ -248,22 +249,13 @@ export function Composer({
           soft 底 + 14px 语义图标 + truncate 正文 + 右端关闭 */}
       {ctl.error && <ErrorBar text={ctl.error} onDismiss={ctl.dismissError} />}
 
-      {ctl.queued && (
-        <div className="alert alert-soft -mx-2.5 flex items-center gap-2 px-3 py-1.5 text-xs">
-          <IconClock size={14} stroke={1.75} aria-hidden className="shrink-0 text-base-content/50" />
-          <span className="shrink-0 font-medium">{t("chat.queued")}</span>
-          <span className="min-w-0 flex-1 truncate">{ctl.queued}</span>
-          <span className="shrink-0 text-base-content/50">{t("chat.queuedHint")}</span>
-          <button
-            type="button"
-            aria-label={t("chat.queuedCancel")}
-            className="btn btn-ghost btn-square btn-xs"
-            onClick={ctl.clearQueued}
-          >
-            <IconX size={14} stroke={1.75} aria-hidden />
-          </button>
-        </div>
-      )}
+      <QueuePanel
+        queue={ctl.queue}
+        updateQueueItem={ctl.updateQueueItem}
+        removeQueueItem={ctl.removeQueueItem}
+        moveQueueItem={ctl.moveQueueItem}
+        lockedId={ctl.lockedQueueId}
+      />
 
       {/* 输入卡外框(形态收口在 composerKit:出血/聚焦边线/禁挂 dropdown 类
           的缘由见 ComposerCard 头注)。斜杠面板是卡内自绘浮层(绝对定位,
