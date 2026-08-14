@@ -326,10 +326,14 @@ fn preview_zoom() -> Result<f64, String> {
         .map(|zoom| *zoom)
         .map_err(|_| "预览缩放状态锁损坏".into())
 }
-const RESET_ZOOM_SCRIPT: &str = "(()=>{const key='__mcPreviewZoomState',previous=window[key];if(!previous)return;for(const item of previous){if(item.value)item.element.style.setProperty(item.name,item.value,item.priority);else item.element.style.removeProperty(item.name)}delete window[key]})()";
+fn zoom_script(scale: f64) -> String {
+    format!(
+        "(()=>{{const target=document.body;if(!target)throw new Error('找不到页面根元素');const root=document.documentElement,body=document.body,s={scale},key='__mcPreviewZoomState',previous=window[key];if(previous){{for(const item of previous){{if(item.value)item.element.style.setProperty(item.name,item.value,item.priority);else item.element.style.removeProperty(item.name)}}delete window[key]}}if(s===1)return;const saved=[];const set=(element,name,value)=>{{if(!saved.some(item=>item.element===element&&item.name===name))saved.push({{element,name,value:element.style.getPropertyValue(name),priority:element.style.getPropertyPriority(name)}});element.style.setProperty(name,value,'important')}};window[key]=saved;const w=root.clientWidth,h=root.clientHeight;set(target,'width',w+'px');set(target,'min-height',h+'px');set(target,'transform','scale('+s+')');set(target,'transform-origin','0 0');set(body,'overflow','visible');set(root,'overflow','auto')}})()"
+    )
+}
 fn apply_zoom(view: &tauri::Webview, scale: f64) -> Result<(), String> {
-    view.eval(RESET_ZOOM_SCRIPT).map_err(|e| e.to_string())?;
-    view.set_zoom(scale).map_err(|e| e.to_string())
+    view.set_zoom(1.0).map_err(|e| e.to_string())?;
+    view.eval(zoom_script(scale)).map_err(|e| e.to_string())
 }
 fn valid_selector(s: &str) -> bool {
     !s.is_empty() && s.len() <= 2048 && !s.chars().any(char::is_control)
@@ -1023,14 +1027,17 @@ mod tests {
         assert!(!valid_text_value(&"x".repeat(32 * 1024 + 1)));
     }
     #[test]
-    fn zoom_reset_restores_page_styles_without_scaling_the_document() {
-        assert!(RESET_ZOOM_SCRIPT
-            .contains("item.element.style.setProperty(item.name,item.value,item.priority)"));
+    fn zoom_scales_the_fixed_canvas_including_responsive_images() {
+        let script = zoom_script(0.75);
+        assert!(script.contains("const target=document.body"));
+        assert!(!script.contains("body.firstElementChild"));
+        assert!(script.contains("set(target,'width',w+'px')"));
+        assert!(script.contains("set(target,'transform','scale('+s+')')"));
+        assert!(script.contains("set(target,'transform-origin','0 0')"));
+        assert!(script.contains("s=0.75"));
         assert!(
-            RESET_ZOOM_SCRIPT.contains("item.element.style.removeProperty(item.name)")
+            script.contains("item.element.style.setProperty(item.name,item.value,item.priority)")
         );
-        assert!(!RESET_ZOOM_SCRIPT.contains("scale("));
-        assert!(!RESET_ZOOM_SCRIPT.contains("transform-origin"));
     }
     #[test]
     fn capture_size_limit_and_png_data_url() {
