@@ -30,7 +30,7 @@ export const previewDestroy = () => invoke<void>("preview_destroy");
 export const previewPickerToggle = (enabled: boolean) => invoke<void>("preview_picker_toggle", { enabled });
 export const previewElementApply = (edit: ElementEdit) => invoke<void>("preview_element_apply", { edit });
 export const previewElementUndo = () => invoke<void>("preview_element_undo");
-export const previewCapture = (mode: "viewport" | "full", requestId: string) => invoke<void>("preview_capture", { mode, requestId });
+export const previewCapture = (mode: "viewport" | "viewport-no-copy" | "full", requestId: string) => invoke<void>("preview_capture", { mode, requestId });
 export const previewSerialize = (requestId: string) => invoke<void>("preview_serialize", { requestId });
 export const previewSaveHtml = (sessionId: string, path: string, html: string) => invoke<void>("preview_save_html", { sessionId, path, html });
 export const previewResultShow = (dataUrl: string, status: string, commentCount: number) => invoke<void>("preview_result_show", { dataUrl, status, commentCount });
@@ -51,7 +51,7 @@ const id32 = () => {
 };
 
 /** Register both event listeners before invoke; reject all late/foreign request IDs. */
-export async function requestCapture(mode: "viewport" | "full", timeoutMs = 20_000): Promise<CaptureResult> {
+export async function requestCapture(mode: "viewport" | "viewport-no-copy" | "full", timeoutMs = 20_000): Promise<CaptureResult> {
   const requestId = id32();
   return new Promise<CaptureResult>((resolve, reject) => {
     let settled = false;

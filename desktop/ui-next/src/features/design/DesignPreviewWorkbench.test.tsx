@@ -1,5 +1,5 @@
 import { StrictMode } from "react";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ComposerCtl } from "@/features/chat/composer/useComposer";
@@ -10,11 +10,15 @@ type EventCb = (event: { payload: unknown }) => void;
 let calls: { cmd: string; args?: Record<string, unknown> }[];
 let events: Map<string, EventCb>;
 let pendingCreates: (() => void)[];
+let pendingPickerToggles: (() => void)[];
 let deferCreates: boolean;
+let deferPickerToggles: boolean;
+let deferCaptures: boolean;
+let captureError: string | null;
 
 beforeEach(() => {
   setLocale("en");
-  calls = []; events = new Map(); pendingCreates = []; deferCreates = false;
+  calls = []; events = new Map(); pendingCreates = []; pendingPickerToggles = []; deferCreates = false; deferPickerToggles = false; deferCaptures = false; captureError = null;
   vi.mocked(composer.sendWithFiles).mockReset().mockResolvedValue(true);
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ x: 400, y: 80, left: 400, top: 80, right: 1000, bottom: 480, width: 600, height: 400, toJSON() {} });
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
@@ -22,8 +26,11 @@ beforeEach(() => {
     core: { invoke: async (cmd: string, args?: Record<string, unknown>) => {
       calls.push({ cmd, args });
       if ((cmd === "preview_create" || cmd === "preview_create_artifact") && deferCreates) await new Promise<void>((resolve) => pendingCreates.push(resolve));
+      if (cmd === "preview_picker_toggle" && deferPickerToggles) await new Promise<void>((resolve) => pendingPickerToggles.push(resolve));
       if (cmd === "preview_serialize") queueMicrotask(() => events.get("preview-serialized")?.({ payload: { requestId: args?.requestId, html: "<html>serialized</html>" } }));
-      if (cmd === "preview_capture") queueMicrotask(() => events.get("preview-captured")?.({ payload: { requestId: args?.requestId, dataUrl: "data:image/png;base64,AQID" } }));
+      if (cmd === "preview_capture" && !deferCaptures) queueMicrotask(() => captureError
+        ? events.get("preview-capture-error")?.({ payload: { requestId: args?.requestId, error: captureError } })
+        : events.get("preview-captured")?.({ payload: { requestId: args?.requestId, dataUrl: "data:image/png;base64,AQID" } }));
       if (cmd === "session_call" && args?.kind === "repo_artifact_read") {
         const path = (args.payload as { path?: string } | undefined)?.path ?? "";
         if (path.endsWith(".png")) return { result: { path, kind: "image", mime: "image/png", data_url: "data:image/png;base64,AQID" } };
@@ -48,6 +55,10 @@ function mount(obscured = false) {
   return render(<DesignPreviewWorkbench sessionId="s1" initialTarget={{ kind: "localhost", url: "http://localhost:5173/app" }} composer={composer} obscured={obscured} onClose={() => {}} />);
 }
 
+function mountArtifact(path = "pages/home.html") {
+  return render(<DesignPreviewWorkbench sessionId="s1" initialTarget={{ kind: "artifact", path, artifactKind: "html" }} composer={composer} obscured={false} onClose={() => {}} />);
+}
+
 describe("DesignPreviewWorkbench native lifecycle", () => {
   it("follows the configured locale for toolbar labels", async () => {
     setLocale("zh-CN");
@@ -55,14 +66,17 @@ describe("DesignPreviewWorkbench native lifecycle", () => {
 
     expect(screen.getByRole("tab", { name: "预览" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: /代码/ })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /选择元素/ })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /截图/ })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "整页" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "注释" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "截图" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "标记" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "编辑" })).toBeTruthy();
     expect(screen.getByLabelText("缩放")).toBeTruthy();
 
     act(() => setLocale("en"));
     expect(await screen.findByRole("tab", { name: "Preview" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /Capture/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Mark/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Annotate/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Edit/ })).toBeTruthy();
   });
 
   it("creates with measured bounds, hides under an obscurer, restores and destroys", async () => {
@@ -186,26 +200,216 @@ describe("DesignPreviewWorkbench native lifecycle", () => {
     await waitFor(() => expect(calls).toContainEqual({ cmd: "preview_save_html", args: { sessionId: "s1", path: "pages/home.html", html: "<html>serialized</html>" } }));
   });
 
+  it("drives every preview toolbar control through its backend command", async () => {
+    mount();
+    await waitFor(() => expect(calls.some((c) => c.cmd === "preview_create")).toBe(true));
+
+    await userEvent.click(screen.getByRole("button", { name: "Tablet" }));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "preview_set_bounds")).toBe(true));
+
+    await userEvent.selectOptions(screen.getByLabelText("Zoom"), "125");
+    expect(calls).toContainEqual({ cmd: "preview_set_zoom", args: { scale: 1.25 } });
+
+    await userEvent.click(screen.getByRole("button", { name: /Edit/ }));
+    await waitFor(() => expect(calls).toContainEqual({ cmd: "preview_picker_toggle", args: { enabled: true } }));
+    expect((await screen.findByRole("status")).textContent).toContain("Select an element to edit.");
+
+    await userEvent.click(screen.getByTitle("Reload"));
+    expect(calls.some((c) => c.cmd === "preview_reload")).toBe(true);
+
+    await userEvent.click(screen.getByRole("button", { name: /Mark/ }));
+    expect(await screen.findByRole("img", { name: "Captured preview" })).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Close capture" }));
+
+    await userEvent.click(screen.getByRole("button", { name: "Screenshot" }));
+    await waitFor(() => expect(calls.filter((c) => c.cmd === "preview_capture" && c.args?.mode === "viewport")).toHaveLength(2));
+    expect(screen.getByRole("status").textContent).toContain("Screenshot copied to clipboard.");
+    expect(screen.queryByRole("img", { name: "Captured preview" })).toBeNull();
+
+    await userEvent.click(screen.getByRole("tab", { name: /Code/ }));
+    expect(await screen.findByLabelText("HTML source")).toBeTruthy();
+    await userEvent.click(screen.getByRole("tab", { name: "Preview" }));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "preview_show")).toBe(true));
+  });
+
+  it("does not show picker as active when the preview is not ready", async () => {
+    deferCreates = true;
+    mount();
+    await waitFor(() => expect(pendingCreates).toHaveLength(1));
+
+    await userEvent.click(screen.getByRole("button", { name: /Edit/ }));
+
+    expect(screen.getByRole("status").textContent).toContain("Preview is still loading.");
+    expect(calls.some((c) => c.cmd === "preview_picker_toggle")).toBe(false);
+    expect(screen.getByRole("button", { name: /Edit/ }).className).not.toContain("btn-primary");
+  });
+
+  it("serializes rapid picker toggles in click order", async () => {
+    deferPickerToggles = true;
+    mount();
+    await waitFor(() => expect(calls.some((c) => c.cmd === "preview_create")).toBe(true));
+    const button = screen.getByRole("button", { name: /Edit/ });
+
+    await userEvent.click(button);
+    await userEvent.click(button);
+
+    expect(button.className).not.toContain("btn-primary");
+    expect(calls.filter((c) => c.cmd === "preview_picker_toggle")).toEqual([
+      { cmd: "preview_picker_toggle", args: { enabled: true } },
+    ]);
+    await act(async () => { pendingPickerToggles.shift()?.(); await Promise.resolve(); });
+    await waitFor(() => expect(calls.filter((c) => c.cmd === "preview_picker_toggle")).toEqual([
+      { cmd: "preview_picker_toggle", args: { enabled: true } },
+      { cmd: "preview_picker_toggle", args: { enabled: false } },
+    ]));
+    await act(async () => { pendingPickerToggles.shift()?.(); await Promise.resolve(); });
+  });
+
+  it("keeps the selected element usable when its background capture fails", async () => {
+    captureError = "snapshot failed";
+    mount();
+    await userEvent.click(screen.getByRole("button", { name: /Edit/ }));
+    await waitFor(() => expect(events.has("preview-element-picked")).toBe(true));
+    act(() => events.get("preview-element-picked")?.({ payload: { selector: "#hero", text: "Hello", tag: "DIV", bounds: { x: 0, y: 0, width: 10, height: 10 }, styles: {} } }));
+
+    const panel = await screen.findByRole("dialog", { name: "Selected element" });
+    expect(within(panel).getByRole("button", { name: "Apply" })).toBeTruthy();
+    expect(panel.parentElement?.querySelector("img")).toBeNull();
+    expect(screen.getByRole("status").textContent).toContain("snapshot failed");
+  });
+
+  it("drops an element result captured before localhost navigation", async () => {
+    deferCaptures = true;
+    mount();
+    await userEvent.click(screen.getByRole("button", { name: /Edit/ }));
+    await waitFor(() => expect(events.has("preview-element-picked")).toBe(true));
+    act(() => events.get("preview-element-picked")?.({ payload: { selector: "#old", text: "Old", tag: "DIV", bounds: { x: 0, y: 0, width: 10, height: 10 }, styles: {} } }));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "preview_capture")).toBe(true));
+    const captureCall = calls.filter((c) => c.cmd === "preview_capture").at(-1);
+
+    const address = screen.getByLabelText("Preview address");
+    await userEvent.clear(address);
+    await userEvent.type(address, "http://localhost:5173/new");
+    await userEvent.click(screen.getByTitle("Navigate"));
+    act(() => events.get("preview-captured")?.({ payload: { requestId: captureCall?.args?.requestId, dataUrl: "data:image/png;base64,AQID" } }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Selected element" })).toBeNull());
+  });
+
+  it("keeps the selected page visible behind the comment panel", async () => {
+    mount();
+    await userEvent.click(screen.getByRole("button", { name: /Annotate/ }));
+    await waitFor(() => expect(events.has("preview-element-picked")).toBe(true));
+    act(() => events.get("preview-element-picked")?.({ payload: { tag: "A", selector: "nav > a", text: "Docs", bounds: { x: 10, y: 20, width: 120, height: 32 }, styles: {} } }));
+
+    const panel = await screen.findByRole("dialog", { name: "Selected element" });
+    expect(panel.parentElement?.querySelector("img")?.getAttribute("src")).toBe("data:image/png;base64,AQID");
+    expect(calls).toContainEqual(expect.objectContaining({ cmd: "preview_capture", args: expect.objectContaining({ mode: "viewport-no-copy" }) }));
+    await waitFor(() => expect(calls.some((call) => call.cmd === "preview_hide")).toBe(true));
+  });
+
+  it("sends a comment for the selected element", async () => {
+    mount();
+    await userEvent.click(screen.getByRole("button", { name: /Annotate/ }));
+    await waitFor(() => expect(events.has("preview-element-picked")).toBe(true));
+    act(() => events.get("preview-element-picked")?.({ payload: { tag: "A", selector: "nav > a", text: "Docs", bounds: { x: 10, y: 20, width: 120, height: 32 }, styles: {} } }));
+
+    await userEvent.type(await screen.findByLabelText("Comment"), "Make this link clearer");
+    await userEvent.click(screen.getByRole("button", { name: "Send comment" }));
+
+    await waitFor(() => expect(composer.sendWithFiles).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(composer.sendWithFiles).mock.calls[0]?.[0]).toContain("nav > a");
+  });
+
+  it("does not let an older comment completion clear a newer selection", async () => {
+    let resolveSend = (_accepted: boolean) => {};
+    vi.mocked(composer.sendWithFiles).mockReturnValueOnce(new Promise<boolean>((resolve) => { resolveSend = resolve; }));
+    mount();
+    await userEvent.click(screen.getByRole("button", { name: /Annotate/ }));
+    await waitFor(() => expect(events.has("preview-element-picked")).toBe(true));
+    act(() => events.get("preview-element-picked")?.({ payload: { tag: "A", selector: "#first", text: "First", bounds: { x: 10, y: 20, width: 120, height: 32 }, styles: {} } }));
+    const firstPanel = await screen.findByRole("dialog", { name: "Selected element" });
+    await userEvent.type(within(firstPanel).getByLabelText("Comment"), "Update first");
+    await userEvent.click(within(firstPanel).getByRole("button", { name: "Send comment" }));
+    await userEvent.click(within(firstPanel).getByRole("button", { name: "Close preview" }));
+
+    await userEvent.click(screen.getByRole("button", { name: /Annotate/ }));
+    act(() => events.get("preview-element-picked")?.({ payload: { tag: "BUTTON", selector: "#second", text: "Second", bounds: { x: 20, y: 40, width: 100, height: 30 }, styles: {} } }));
+    expect(await screen.findByText(/BUTTON · #second/)).toBeTruthy();
+    await act(async () => { resolveSend(true); await Promise.resolve(); });
+
+    expect(screen.getByText(/BUTTON · #second/)).toBeTruthy();
+  });
+
+  it("includes the current artifact path in an element comment", async () => {
+    mountArtifact("pages/home.html");
+    await userEvent.click(screen.getByRole("button", { name: /Annotate/ }));
+    await waitFor(() => expect(events.has("preview-element-picked")).toBe(true));
+    act(() => events.get("preview-element-picked")?.({ payload: { tag: "A", selector: "nav > a", text: "Docs", bounds: { x: 10, y: 20, width: 120, height: 32 }, styles: {} } }));
+
+    await userEvent.type(await screen.findByLabelText("Comment"), "Make this link clearer");
+    await userEvent.click(screen.getByRole("button", { name: "Send comment" }));
+
+    await waitFor(() => expect(composer.sendWithFiles).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(composer.sendWithFiles).mock.calls[0]?.[0]).toContain("File path: pages/home.html");
+    const attachment = vi.mocked(composer.sendWithFiles).mock.calls[0]?.[1]?.[0];
+    expect(await attachment?.text()).toContain('"target": "pages/home.html"');
+  });
+
+  it("positions the selected-element panel relative to the centered preview host", async () => {
+    vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockImplementation(function (this: HTMLElement) {
+      if (this.dataset.previewHost !== undefined) return { x: 500, y: 100, left: 500, top: 100, right: 890, bottom: 480, width: 390, height: 380, toJSON() {} };
+      return { x: 400, y: 80, left: 400, top: 80, right: 1000, bottom: 480, width: 600, height: 400, toJSON() {} };
+    });
+    mount();
+    await userEvent.click(screen.getByRole("button", { name: /Edit/ }));
+    await waitFor(() => expect(events.has("preview-element-picked")).toBe(true));
+    act(() => events.get("preview-element-picked")?.({ payload: { selector: "#hero", text: "Hello", tag: "DIV", bounds: { x: 10, y: 20, width: 10, height: 10 }, styles: {} } }));
+
+    const panel = await screen.findByRole("dialog", { name: "Selected element" });
+    expect(panel.style.left).toContain("110px");
+    expect(panel.style.top).toContain("58px");
+    const background = panel.parentElement?.querySelector("img");
+    expect(background?.style.left).toBe("100px");
+    expect(background?.style.top).toBe("20px");
+    expect(background?.style.width).toBe("390px");
+    expect(background?.style.height).toBe("380px");
+  });
+
   it("uses backend picker apply and undo actions", async () => {
     mount();
-    await userEvent.click(screen.getByRole("button", { name: /Pick/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Edit/ }));
     expect(calls.some((c) => c.cmd === "preview_picker_toggle" && c.args?.enabled === true)).toBe(true);
     await waitFor(() => expect(events.has("preview-element-picked")).toBe(true));
     act(() => {
       events.get("preview-element-picked")?.({ payload: { selector: "#hero", text: "Hello", tag: "DIV", bounds: { x: 0, y: 0, width: 10, height: 10 }, styles: {} } });
     });
     expect(await screen.findByText(/DIV · #hero/)).toBeTruthy();
-    await userEvent.clear(screen.getByLabelText("Element value"));
-    await userEvent.type(screen.getByLabelText("Element value"), "Updated");
+    await userEvent.clear(screen.getByLabelText("Property value"));
+    await userEvent.type(screen.getByLabelText("Property value"), "Updated");
     await userEvent.click(screen.getByRole("button", { name: "Apply" }));
     await waitFor(() => expect(calls.some((c) => c.cmd === "preview_element_apply" && (c.args?.edit as { value?: string }).value === "Updated")).toBe(true));
     await userEvent.click(screen.getByRole("button", { name: /Undo/ }));
     expect(calls.some((c) => c.cmd === "preview_element_undo")).toBe(true);
   });
 
+  it("provides a visible text input and places its content on the capture", async () => {
+    mount();
+    await userEvent.click(screen.getByRole("button", { name: /Mark/ }));
+    await userEvent.click(await screen.findByRole("button", { name: "Text" }));
+
+    const input = screen.getByLabelText("Annotation text");
+    await userEvent.type(input, "Move this section");
+    const surface = screen.getByLabelText("Annotation surface");
+    Object.defineProperty(surface, "setPointerCapture", { value: vi.fn() });
+    await userEvent.pointer({ target: surface, coords: { clientX: 460, clientY: 200 }, keys: "[MouseLeft]" });
+
+    expect(screen.getByText("Move this section")).toBeTruthy();
+  });
+
   it("composes the captured PNG before using the guarded composer API", async () => {
     mount();
-    await userEvent.click(screen.getByRole("button", { name: /Capture/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Mark/ }));
     expect(await screen.findByRole("img", { name: "Captured preview" })).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: /^Send$/ }));
     await waitFor(() => expect(composer.sendWithFiles).toHaveBeenCalledTimes(1));
@@ -226,7 +430,7 @@ describe("DesignPreviewWorkbench native lifecycle", () => {
   it("keeps the capture open and visibly reports a guarded send failure", async () => {
     vi.mocked(composer.sendWithFiles).mockResolvedValueOnce(false);
     mount();
-    await userEvent.click(screen.getByRole("button", { name: /Capture/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Mark/ }));
     await userEvent.click(await screen.findByRole("button", { name: /^Send$/ }));
     expect(await screen.findByText(/Feedback was not sent/)).toBeTruthy();
     expect(screen.getByRole("img", { name: "Captured preview" })).toBeTruthy();
@@ -235,7 +439,7 @@ describe("DesignPreviewWorkbench native lifecycle", () => {
 
   it("uses the same image composer path for the native preview-result send action", async () => {
     mount();
-    await userEvent.click(screen.getByRole("button", { name: /Capture/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Mark/ }));
     await userEvent.click(await screen.findByRole("button", { name: /^Send$/ }));
     await waitFor(() => expect(composer.sendWithFiles).toHaveBeenCalledTimes(1));
     vi.mocked(composer.sendWithFiles).mockClear();

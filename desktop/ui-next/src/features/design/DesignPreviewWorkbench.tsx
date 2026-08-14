@@ -21,8 +21,7 @@ import { normalizePreviewUrl } from "./previewUrl";
 type Annotation =
   | { kind: "rect"; x: number; y: number; width: number; height: number }
   | { kind: "pen"; points: { x: number; y: number }[] }
-  | { kind: "text"; x: number; y: number; text: string }
-  | { kind: "comment"; x: number; y: number; text: string };
+  | { kind: "text"; x: number; y: number; text: string };
 type Tool = Annotation["kind"];
 
 const PRESETS = { desktop: 1280, tablet: 768, mobile: 390 } as const;
@@ -50,14 +49,14 @@ async function annotatedDataUrl(dataUrl: string, annotations: Annotation[]): Pro
   ctx.lineWidth = Math.max(2, canvas.width / 500);
   ctx.font = `${Math.max(14, canvas.width / 70)}px sans-serif`;
   for (const a of annotations) {
-    ctx.strokeStyle = a.kind === "comment" ? "#ffcc00" : "#ff2d2d";
+    ctx.strokeStyle = "#ff2d2d";
     ctx.fillStyle = ctx.strokeStyle;
     if (a.kind === "rect") ctx.strokeRect(x(a.x), y(a.y), x(a.width), y(a.height));
     else if (a.kind === "pen") {
       ctx.beginPath();
       a.points.forEach((p, i) => i ? ctx.lineTo(x(p.x), y(p.y)) : ctx.moveTo(x(p.x), y(p.y)));
       ctx.stroke();
-    } else ctx.fillText(`${a.kind === "comment" ? "● " : ""}${a.text}`, x(a.x), y(a.y));
+    } else ctx.fillText(a.text, x(a.x), y(a.y));
   }
   return canvas.toDataURL("image/png");
 }
@@ -78,11 +77,9 @@ function pngFileOf(dataUrl: string): File {
 }
 
 function feedbackOf(url: string, annotations: Annotation[]) {
-  const comments = annotations.filter((a): a is Extract<Annotation, { kind: "comment" }> => a.kind === "comment");
   return [
     `Design preview feedback for ${url}`,
-    ...comments.map((a, i) => `${i + 1}. ${a.text} (at ${Math.round(a.x)}%, ${Math.round(a.y)}%)`),
-    comments.length ? "" : "Please review the attached preview state.",
+    "Please review the attached marked preview.",
     `Annotations: ${annotations.length}.`,
   ].join("\n");
 }
@@ -105,8 +102,10 @@ export function DesignPreviewWorkbench({
   const artifactCreateQueueRef = useRef(Promise.resolve());
   const [paneWidth, setPaneWidth] = useState<number | string>("65%");
   const [target, setTarget] = useState<DesignPreviewTarget>(initialTarget);
-  const latestRef = useRef({ sessionId, initialUrl, targetKind: target.kind });
-  latestRef.current = { sessionId, initialUrl, targetKind: target.kind };
+  const targetKey = target.kind === "localhost" ? `localhost:${normalizePreviewUrl(target.url) ?? target.url}` : target.kind === "artifact" ? `artifact:${target.path}` : "none";
+  const latestRef = useRef({ sessionId, targetKey, targetKind: target.kind });
+  latestRef.current = { sessionId, targetKey, targetKind: target.kind };
+  const elementSelectionRef = useRef(0);
   const [address, setAddress] = useState(initialUrl);
   const [filesOpen, setFilesOpen] = useState(false);
   const [previewFiles, setPreviewFiles] = useState<RepoPreviewFile[] | null>(null);
@@ -121,7 +120,17 @@ export function DesignPreviewWorkbench({
   const [html, setHtml] = useState("");
   const [savePath, setSavePath] = useState("index.html");
   const [picker, setPicker] = useState(false);
+  const [pickerPurpose, setPickerPurpose] = useState<"edit" | "comment" | null>(null);
+  const pickerRef = useRef(false);
+  pickerRef.current = picker;
+  const pickerCommandRef = useRef<Promise<void>>(Promise.resolve());
+  const overlayRef = useRef<HTMLDivElement>(null);
   const [picked, setPicked] = useState<ElementSnapshot | null>(null);
+  const pickedRef = useRef<ElementSnapshot | null>(null);
+  pickedRef.current = picked;
+  const commentRequestRef = useRef(0);
+  const [pickedPreview, setPickedPreview] = useState<string | null>(null);
+  const [commentText, setCommentText] = useState("");
   const [property, setProperty] = useState("text");
   const [value, setValue] = useState("");
   const [capture, setCapture] = useState<string | null>(null);
@@ -129,6 +138,7 @@ export function DesignPreviewWorkbench({
   const resultAnnotationsRef = useRef<Annotation[]>([]);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [tool, setTool] = useState<Tool>("rect");
+  const [annotationText, setAnnotationText] = useState("");
   const drawing = useRef<Annotation | null>(null);
   const feedbackSendingRef = useRef(false);
   const [feedbackSending, setFeedbackSending] = useState(false);
@@ -138,6 +148,10 @@ export function DesignPreviewWorkbench({
     if (initialTarget.kind === "localhost") setAddress(initialTarget.url);
     setFilesOpen(false);
   }, [initialTarget]);
+
+  useEffect(() => {
+    elementSelectionRef.current += 1;
+  }, [sessionId, targetKey]);
 
   const native = target.kind === "localhost" || (target.kind === "artifact" && target.artifactKind === "html");
   const previewSourceKey = target.kind === "localhost" ? "localhost" : target.kind === "artifact" && target.artifactKind === "html" ? `artifact:${target.path}` : "none";
@@ -219,6 +233,7 @@ export function DesignPreviewWorkbench({
         }
         createdRef.current = true;
         bounds();
+        if (pickerRef.current) void previewPickerToggle(true).catch((error) => { setPicker(false); report(error); });
       }, (error) => { starting = false; report(error); });
     };
     const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(sync);
@@ -274,7 +289,20 @@ export function DesignPreviewWorkbench({
     const generation = liveRef.current;
     const offPicked = onPreviewElementPicked((snapshot) => {
       if (liveRef.current !== generation) return;
-      setPicker(false); setPicked(snapshot); setProperty("text"); setValue(snapshot.text);
+      const selection = ++elementSelectionRef.current;
+      const selectedTarget = latestRef.current.targetKey;
+      const showPicked = (preview: string | null) => {
+        if (liveRef.current !== generation || elementSelectionRef.current !== selection || latestRef.current.targetKey !== selectedTarget) return;
+        setPickedPreview(preview);
+        setPicked(snapshot); setProperty("text"); setValue(snapshot.text);
+      };
+      setPicker(false);
+      void requestCapture("viewport-no-copy").then((result) => {
+        showPicked(result.dataUrl);
+      }).catch((error) => {
+        showPicked(null);
+        if (elementSelectionRef.current === selection && latestRef.current.targetKey === selectedTarget) report(error);
+      });
       void previewPickerToggle(false).catch(report);
     });
     const offError = onPreviewPickerError((error) => liveRef.current === generation && report(error));
@@ -293,9 +321,34 @@ export function DesignPreviewWorkbench({
     return () => { offPicked(); offError(); offAction(); };
   }, [sessionId, submitFeedback, report]);
 
+  const togglePicker = (purpose: "edit" | "comment") => {
+    if (!createdRef.current) {
+      setStatus(t("design.preview.loading"));
+      return;
+    }
+    const next = !pickerRef.current || pickerPurpose !== purpose;
+    pickerRef.current = next;
+    setPicker(next);
+    setPickerPurpose(next ? purpose : null);
+    if (next) { setPicked(null); setPickedPreview(null); setCommentText(""); }
+    setStatus(next ? t(purpose === "comment" ? "design.preview.commentHint" : "design.preview.editHint") : "");
+    pickerCommandRef.current = pickerCommandRef.current
+      .catch(() => undefined)
+      .then(() => previewPickerToggle(next))
+      .catch((error) => {
+        if (pickerRef.current === next) {
+          pickerRef.current = false;
+          setPicker(false);
+          setPickerPurpose(null);
+        }
+        report(error);
+      });
+  };
   const navigate = () => {
     const normalized = normalizePreviewUrl(address);
     if (!normalized) { setStatus("Only localhost, 127.0.0.1 and [::1] HTTP(S) URLs are allowed."); return; }
+    elementSelectionRef.current += 1;
+    setPicked(null); setPickedPreview(null);
     setAddress(normalized); setTarget({ kind: "localhost", url: normalized }); setStatus("");
     if (native) void previewNavigate(normalized).catch(report);
   };
@@ -307,12 +360,20 @@ export function DesignPreviewWorkbench({
       setHtml(serialized); setTab("code"); setStatus("");
     } catch (error) { report(error); }
   };
-  const startCapture = async (mode: "viewport" | "full") => {
-    setStatus("Capturing…");
+  const takeScreenshot = async () => {
+    setStatus(t("design.preview.capturing"));
     try {
-      const result = await requestCapture(mode);
+      const result = await requestCapture("viewport");
       if (latestRef.current.sessionId !== sessionId) return;
-      setCapture(result.dataUrl); setAnnotations([]); setStatus(result.clipboardError ?? "");
+      setStatus(result.clipboardError ? t("design.preview.copyFailed", { error: result.clipboardError }) : t("design.preview.copied"));
+    } catch (error) { report(error); }
+  };
+  const startCapture = async () => {
+    setStatus(t("design.preview.capturing"));
+    try {
+      const result = await requestCapture("viewport");
+      if (latestRef.current.sessionId !== sessionId) return;
+      setCapture(result.dataUrl); setAnnotations([]); setAnnotationText(""); setStatus(result.clipboardError ?? "");
     } catch (error) { report(error); }
   };
   const closeCapture = () => {
@@ -321,7 +382,7 @@ export function DesignPreviewWorkbench({
     resultImageRef.current = image;
     resultAnnotationsRef.current = annotations;
     setCapture(null);
-    void previewResultShow(image, "Annotation ready", annotations.filter((a) => a.kind === "comment").length).catch(report);
+    void previewResultShow(image, t("design.preview.annotationReady"), annotations.length).catch(report);
   };
   const sendFeedback = async () => {
     const image = capture;
@@ -336,8 +397,8 @@ export function DesignPreviewWorkbench({
   const onPointerDown = (e: ReactPointerEvent<SVGSVGElement>) => {
     const p = point(e);
     e.currentTarget.setPointerCapture(e.pointerId);
-    if (tool === "text" || tool === "comment") {
-      const text = window.prompt(tool === "comment" ? "Comment" : "Text")?.trim();
+    if (tool === "text") {
+      const text = annotationText.trim();
       if (text) setAnnotations((all) => [...all, { kind: tool, ...p, text }]);
       return;
     }
@@ -356,10 +417,49 @@ export function DesignPreviewWorkbench({
     setAnnotations((all) => [...all, next]);
   };
 
+  const previewTarget = target.kind === "artifact" ? target.path : address;
+  const submitElementComment = async () => {
+    if (!picked || !commentText.trim() || feedbackSendingRef.current) return;
+    const request = ++commentRequestRef.current;
+    const selected = picked;
+    const selectedTarget = latestRef.current.targetKey;
+    feedbackSendingRef.current = true;
+    setFeedbackSending(true);
+    try {
+      const text = [
+        t("design.preview.commentPrompt"),
+        `${target.kind === "artifact" ? t("design.preview.filePath") : "URL"}: ${previewTarget}`,
+        `${t("design.preview.elementSelector")}: ${picked.selector}`,
+        `${t("design.preview.elementTag")}: ${picked.tag}`,
+        `${t("design.preview.commentContent")}: ${commentText.trim()}`,
+      ].join("\n");
+      const accepted = await composer.sendWithFiles(text, [new File([JSON.stringify({ target: previewTarget, comment: commentText.trim(), element: picked }, null, 2)], "element-comment.json", { type: "application/json" })]);
+      if (commentRequestRef.current !== request || pickedRef.current !== selected || latestRef.current.targetKey !== selectedTarget) return;
+      if (!accepted) { setStatus(t("design.preview.feedbackFailed")); return; }
+      setPicked(null); setCommentText(""); setPickerPurpose(null); setStatus(t("design.preview.commentSent"));
+    } catch (error) {
+      if (commentRequestRef.current === request && pickedRef.current === selected && latestRef.current.targetKey === selectedTarget) report(error);
+    }
+    finally { feedbackSendingRef.current = false; setFeedbackSending(false); }
+  };
   const applyEdit = async () => {
     if (!picked) return;
-    try { await previewElementApply({ selector: picked.selector, property, value: property === "delete" ? "" : value }); setStatus("Applied in preview."); }
+    try { await previewElementApply({ selector: picked.selector, property, value: property === "delete" ? "" : value }); setStatus(t("design.preview.applied")); }
     catch (error) { report(error); }
+  };
+  const selectedPreviewPosition = (() => {
+    const hostRect = hostRef.current?.getBoundingClientRect();
+    const overlayRect = overlayRef.current?.getBoundingClientRect();
+    return {
+      left: (hostRect?.left ?? 0) - (overlayRect?.left ?? 0),
+      top: (hostRect?.top ?? 0) - (overlayRect?.top ?? 0),
+      width: hostRect?.width ?? 0,
+      height: hostRect?.height ?? 0,
+    };
+  })();
+  const selectedElementPosition = {
+    left: selectedPreviewPosition.left + (picked?.bounds.x ?? 0),
+    top: selectedPreviewPosition.top + (picked?.bounds.y ?? 0) + (picked?.bounds.height ?? 0) + 8,
   };
 
   return (
@@ -392,7 +492,7 @@ export function DesignPreviewWorkbench({
         {filesOpen && <div className="absolute inset-x-2 top-10 z-40 max-h-72 overflow-auto rounded-box border border-base-300 bg-base-100 p-2 shadow-lg">
           <div className="flex gap-1"><input autoFocus aria-label={t("design.preview.searchFiles")} className="input input-xs min-w-0 flex-1" placeholder={t("design.preview.searchPlaceholder")} value={fileQuery} onChange={(e) => setFileQuery(e.target.value)} /><button className="btn btn-ghost btn-xs" disabled={filesLoading} onClick={() => void loadFiles()}><IconRefresh size={13} /> {t("design.preview.refresh")}</button></div>
           {filesTruncated && <p className="py-1 text-xs text-warning">{t("design.preview.truncated")}</p>}
-          <div className="mt-1 flex flex-col">{visibleFiles.map((file) => <button key={file.path} className="btn btn-ghost btn-sm h-auto min-h-8 justify-start font-mono text-xs" title={file.path} onClick={() => { setTarget(targetForFile(file)); setFilesOpen(false); }}>{file.path}</button>)}</div>
+          <div className="mt-1 flex flex-col">{visibleFiles.map((file) => <button key={file.path} className="btn btn-ghost btn-sm h-auto min-h-8 justify-start font-mono text-xs" title={file.path} onClick={() => { elementSelectionRef.current += 1; setPicked(null); setPickedPreview(null); setTarget(targetForFile(file)); setFilesOpen(false); }}>{file.path}</button>)}</div>
           {!filesLoading && visibleFiles.length === 0 && <p className="p-2 text-xs text-base-content/60">{t("design.preview.empty")}</p>}
         </div>}
       </div>
@@ -406,15 +506,16 @@ export function DesignPreviewWorkbench({
           <button role="tab" className={`tab ${tab === "preview" ? "tab-active" : ""}`} onClick={() => { setTab("preview"); requestAnimationFrame(() => void previewShow().then(bounds).catch(report)); }}>{t("design.preview.tab.preview")}</button>
           <button role="tab" className={`tab ${tab === "code" ? "tab-active" : ""}`} onClick={() => void serialize()}><IconCode size={12} stroke={1.75} /> {t("design.preview.tab.code")}</button>
         </div>
-        <button className={`btn btn-xs ms-auto ${picker ? "btn-primary" : "btn-ghost"}`} onClick={() => { const next = !picker; setPicker(next); void previewPickerToggle(next).catch(report); }}><IconPointer size={13} stroke={1.75} /> {t("design.preview.pick")}</button>
-        <button className="btn btn-ghost btn-xs" onClick={() => void startCapture("viewport")}><IconCamera size={13} stroke={1.75} /> {t("design.preview.capture")}</button>
-        <button className="btn btn-ghost btn-xs" onClick={() => void startCapture("full")}>{t("design.preview.full")}</button>
+        <button className="btn btn-ghost btn-xs ms-auto" onClick={() => void takeScreenshot()}><IconCamera size={13} stroke={1.75} /> {t("design.preview.screenshot")}</button>
+        <button className={`btn btn-xs ${picker && pickerPurpose === "comment" ? "btn-primary" : "btn-ghost"}`} onClick={() => void togglePicker("comment")}><IconMessage size={13} stroke={1.75} /> {t("design.preview.annotate")}</button>
+        <button className="btn btn-ghost btn-xs" onClick={() => void startCapture()}><IconPencil size={13} stroke={1.75} /> {t("design.preview.mark")}</button>
+        <button className={`btn btn-xs ${picker && pickerPurpose === "edit" ? "btn-primary" : "btn-ghost"}`} onClick={() => void togglePicker("edit")}><IconPointer size={13} stroke={1.75} /> {t("design.preview.edit")}</button>
         <select aria-label={t("design.preview.zoom")} className="select select-xs w-20" value={zoom} onChange={(e) => { const n = Math.min(500, Math.max(10, Number(e.target.value))); setZoom(n); void previewSetZoom(n / 100).catch(report); }}>
           {[10, 25, 50, 75, 100, 125, 150, 200, 300, 400, 500].map((n) => <option key={n} value={n}>{n}%</option>)}
         </select>
       </div>}
       {status && <div role="status" className="shrink-0 border-b border-base-300 px-3 py-1 text-xs text-base-content/60">{status}</div>}
-      <div className="relative min-h-0 flex-1 overflow-hidden bg-base-200">
+      <div ref={overlayRef} className="relative min-h-0 flex-1 overflow-hidden bg-base-200">
         {target.kind === "artifact" && target.artifactKind !== "html" ? (
           artifact?.kind === "image" ? <div className="flex size-full items-center justify-center overflow-auto p-2"><img src={artifact.dataUrl} alt={artifact.path} className="max-h-full max-w-full" /></div>
           : artifact?.kind === "text" ? <div className="size-full overflow-auto"><CodeView path={artifact.path} text={artifact.content} /></div>
@@ -425,39 +526,53 @@ export function DesignPreviewWorkbench({
           </div>
         ) : (
           <div className="flex size-full flex-col gap-2 p-2">
-            <textarea aria-label="Serialized HTML" wrap="off" className="textarea size-full min-h-0 min-w-0 flex-1 resize-none overflow-auto whitespace-pre font-mono text-xs" value={html} onChange={(e) => setHtml(e.target.value)} />
+            <textarea aria-label={t("design.preview.code.html")} wrap="off" className="textarea size-full min-h-0 min-w-0 flex-1 resize-none overflow-auto whitespace-pre font-mono text-xs" value={html} onChange={(e) => setHtml(e.target.value)} />
             <div className="flex gap-2">
-              <input aria-label="Project-relative HTML path" className="input input-sm min-w-0 flex-1 font-mono" value={savePath} onChange={(e) => setSavePath(e.target.value)} />
-              <button className="btn btn-primary btn-sm" onClick={() => void previewSaveHtml(sessionId, savePath, html).then(() => setStatus(`Saved ${savePath}`), report)}>Save HTML</button>
+              <input aria-label={t("design.preview.code.path")} className="input input-sm min-w-0 flex-1 font-mono" value={savePath} onChange={(e) => setSavePath(e.target.value)} />
+              <button className="btn btn-primary btn-sm" onClick={() => void previewSaveHtml(sessionId, savePath, html).then(() => setStatus(t("design.preview.code.saved", { path: savePath })), report)}>{t("design.preview.code.save")}</button>
             </div>
           </div>
         )}
         {picked && (
-          <div className="absolute inset-3 z-10 overflow-auto rounded-box bg-base-100 p-3 shadow-sm">
-            <div className="flex items-center gap-2"><strong className="min-w-0 flex-1 truncate text-sm">{picked.tag} · {picked.selector}</strong><button className="btn btn-ghost btn-square btn-xs" onClick={() => setPicked(null)}><IconX size={14} /></button></div>
-            <p className="mt-1 text-xs text-base-content/60">{picked.text.slice(0, 240)}</p>
-            <select aria-label="Element property" className="select select-sm mt-3 w-full" value={property} onChange={(e) => { setProperty(e.target.value); setValue(e.target.value === "text" ? picked.text : ""); }}>
-              <option value="text">Text</option><option value="color">Color</option><option value="backgroundColor">Background</option><option value="fontSize">Font size</option><option value="opacity">Opacity</option><option value="borderRadius">Border radius</option><option value="delete">Delete element</option>
-            </select>
-            {property !== "delete" && <textarea aria-label="Element value" className="textarea textarea-sm mt-2 w-full" value={value} onChange={(e) => setValue(e.target.value)} />}
-            <div className="mt-2 flex gap-2"><button className="btn btn-primary btn-sm" onClick={() => void applyEdit()}>Apply</button><button className="btn btn-ghost btn-sm" onClick={() => void previewElementUndo().catch(report)}><IconArrowBackUp size={14} /> Undo</button></div>
+          <div className="absolute inset-0 z-10 pointer-events-none">
+          {pickedPreview && <img src={pickedPreview} alt="" className="absolute object-fill" style={selectedPreviewPosition} />}
+          <div
+            role="dialog"
+            aria-label={t("design.preview.element")}
+            className="pointer-events-auto absolute w-80 max-w-[calc(100%-1.5rem)] overflow-auto rounded-box border border-base-300 bg-base-100 p-3 shadow-xl"
+            style={{ left: Math.max(12, selectedElementPosition.left), top: Math.max(12, selectedElementPosition.top) }}
+          >
+            <div className="flex items-center gap-2"><div className="min-w-0 flex-1"><span className="text-xs text-base-content/60">{t("design.preview.element")}</span><strong className="block truncate font-mono text-sm" title={picked.selector}>{picked.tag} · {picked.selector}</strong></div><button aria-label={t("design.preview.close")} className="btn btn-ghost btn-square btn-xs" onClick={() => { setPicked(null); setPickedPreview(null); }}><IconX size={14} /></button></div>
+            <dl className="mt-2 grid grid-cols-[4rem_minmax(0,1fr)] gap-x-2 gap-y-1 text-xs"><dt className="text-base-content/60">{t("design.preview.elementSize")}</dt><dd>{Math.round(picked.bounds.width)}×{Math.round(picked.bounds.height)}</dd><dt className="text-base-content/60">{t("design.preview.elementText")}</dt><dd className="truncate" title={picked.text}>{picked.text || "—"}</dd></dl>
+            {pickerPurpose === "comment" ? <>
+              <label className="mt-3 block text-xs"><span>{t("design.preview.commentContent")}</span><textarea autoFocus aria-label={t("design.preview.commentContent")} placeholder={t("design.preview.commentPlaceholder")} className="textarea textarea-sm mt-1 w-full" value={commentText} onChange={(e) => setCommentText(e.target.value)} /></label>
+              <div className="mt-2 flex justify-end"><button className="btn btn-primary btn-sm" disabled={feedbackSending || !commentText.trim()} onClick={() => void submitElementComment()}><IconSend size={14} /> {t("design.preview.sendComment")}</button></div>
+            </> : <>
+              <select aria-label={t("design.preview.elementProperty")} className="select select-sm mt-3 w-full" value={property} onChange={(e) => { setProperty(e.target.value); setValue(e.target.value === "text" ? picked.text : ""); }}>
+                <option value="text">{t("design.preview.property.text")}</option><option value="color">{t("design.preview.property.color")}</option><option value="backgroundColor">{t("design.preview.property.background")}</option><option value="fontSize">{t("design.preview.property.fontSize")}</option><option value="opacity">{t("design.preview.property.opacity")}</option><option value="borderRadius">{t("design.preview.property.borderRadius")}</option><option value="delete">{t("design.preview.property.delete")}</option>
+              </select>
+              {property !== "delete" && <textarea aria-label={t("design.preview.elementValue")} className="textarea textarea-sm mt-2 w-full" value={value} onChange={(e) => setValue(e.target.value)} />}
+              <div className="mt-2 flex gap-2"><button className="btn btn-primary btn-sm" onClick={() => void applyEdit()}>{t("design.preview.apply")}</button><button className="btn btn-ghost btn-sm" onClick={() => void previewElementUndo().catch(report)}><IconArrowBackUp size={14} /> {t("design.preview.undo")}</button></div>
+            </>}
+          </div>
           </div>
         )}
         {capture && (
           <div className="absolute inset-0 z-20 flex flex-col bg-base-200 p-2">
             <div className="flex shrink-0 flex-wrap gap-1 pb-2">
-              {([['rect', IconSquare], ['pen', IconPencil], ['text', IconCode], ['comment', IconMessage]] as const).map(([name, Icon]) => <button key={name} className={`btn btn-xs ${tool === name ? "btn-active" : "btn-ghost"}`} onClick={() => setTool(name)}><Icon size={13} /> {name}</button>)}
-              <button className="btn btn-ghost btn-xs ms-auto" onClick={() => setAnnotations((a) => a.slice(0, -1))}><IconArrowBackUp size={13} /> Undo</button>
-              <button className="btn btn-ghost btn-xs" onClick={() => setAnnotations([])}><IconTrash size={13} /> Clear</button>
-              <button className="btn btn-ghost btn-xs" onClick={() => void downloadAnnotated(capture, annotations).catch(report)}><IconDownload size={13} /> Download</button>
-              <button className="btn btn-primary btn-xs" disabled={feedbackSending} onClick={() => void sendFeedback()}><IconSend size={13} /> Send</button>
-              <button className="btn btn-ghost btn-square btn-xs" onClick={closeCapture}><IconX size={13} /></button>
+              {([['rect', IconSquare], ['pen', IconPencil], ['text', IconCode]] as const).map(([name, Icon]) => <button key={name} className={`btn btn-xs ${tool === name ? "btn-active" : "btn-ghost"}`} onClick={() => setTool(name)}><Icon size={13} /> {t(`design.preview.capture.${name}` as MessageKey)}</button>)}
+              {tool === "text" && <input autoFocus aria-label={t("design.preview.capture.textInput")} placeholder={t("design.preview.capture.textPlaceholder")} className="input input-xs min-w-32 flex-1" value={annotationText} onChange={(e) => setAnnotationText(e.target.value)} />}
+              <button className="btn btn-ghost btn-xs ms-auto" onClick={() => setAnnotations((a) => a.slice(0, -1))}><IconArrowBackUp size={13} /> {t("design.preview.undo")}</button>
+              <button className="btn btn-ghost btn-xs" onClick={() => setAnnotations([])}><IconTrash size={13} /> {t("design.preview.capture.clear")}</button>
+              <button className="btn btn-ghost btn-xs" onClick={() => void downloadAnnotated(capture, annotations).catch(report)}><IconDownload size={13} /> {t("design.preview.capture.download")}</button>
+              <button className="btn btn-primary btn-xs" disabled={feedbackSending} onClick={() => void sendFeedback()}><IconSend size={13} /> {t("design.preview.capture.send")}</button>
+              <button aria-label={t("design.preview.closeCapture")} className="btn btn-ghost btn-square btn-xs" onClick={closeCapture}><IconX size={13} /></button>
             </div>
             <div className="min-h-0 flex-1 overflow-auto">
               <div className="relative w-fit max-w-full">
-              <img src={capture} alt="Captured preview" className="block max-w-full select-none" draggable={false} />
-              <svg aria-label="Annotation surface" className="absolute inset-0 size-full touch-none" viewBox="0 0 100 100" preserveAspectRatio="none" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}>
-                {annotations.map((a, i) => a.kind === "rect" ? <rect key={i} x={Math.min(a.x, a.x + a.width)} y={Math.min(a.y, a.y + a.height)} width={Math.abs(a.width)} height={Math.abs(a.height)} fill="none" stroke="red" strokeWidth="0.5" /> : a.kind === "pen" ? <polyline key={i} points={a.points.map((p) => `${p.x},${p.y}`).join(' ')} fill="none" stroke="red" strokeWidth="0.6" /> : <text key={i} x={a.x} y={a.y} fill={a.kind === "comment" ? "#ffcc00" : "red"} fontSize="3">{a.kind === "comment" ? `● ${a.text}` : a.text}</text>)}
+              <img src={capture} alt={t("design.preview.capture.image")} className="block max-w-full select-none" draggable={false} />
+              <svg aria-label={t("design.preview.capture.surface")} className="absolute inset-0 size-full touch-none" viewBox="0 0 100 100" preserveAspectRatio="none" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}>
+                {annotations.map((a, i) => a.kind === "rect" ? <rect key={i} x={Math.min(a.x, a.x + a.width)} y={Math.min(a.y, a.y + a.height)} width={Math.abs(a.width)} height={Math.abs(a.height)} fill="none" stroke="red" strokeWidth="0.5" /> : a.kind === "pen" ? <polyline key={i} points={a.points.map((p) => `${p.x},${p.y}`).join(' ')} fill="none" stroke="red" strokeWidth="0.6" /> : <text key={i} x={a.x} y={a.y} fill="red" fontSize="3">{a.text}</text>)}
               </svg>
               </div>
             </div>

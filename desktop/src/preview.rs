@@ -5,7 +5,10 @@ use std::borrow::Cow;
 use std::path::{Component, Path, PathBuf};
 use std::{
     collections::HashMap,
-    sync::{Mutex, OnceLock},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex, OnceLock,
+    },
 };
 use tauri::{
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, State, Url, WebviewBuilder,
@@ -16,6 +19,7 @@ const LABEL: &str = "design-preview";
 const RESULT_SCHEME: &str = "monkeycode-picker";
 const PREVIEW_RESULT_SCHEME: &str = "monkeycode-preview-result";
 const MAX_RESULT_BYTES: usize = 32 * 1024;
+static PICKER_ACTIVE: AtomicBool = AtomicBool::new(false);
 const SERIALIZE_SCHEME: &str = "monkeycode-serialize";
 const SERIALIZE_JS: &str = r#"(()=>{window.__mcSerialize=async id=>{try{const html='<!doctype html>\n'+new XMLSerializer().serializeToString(document.documentElement);if(new TextEncoder().encode(html).length>8388608)throw Error('HTML 超过 8 MiB 限制');const n=4000,total=Math.ceil(html.length/n);for(let i=0;i<total;i++){location.href=`monkeycode-serialize://${id}?index=${i}&total=${total}&data=${encodeURIComponent(html.slice(i*n,(i+1)*n))}`;await new Promise(r=>setTimeout(r,0))}}catch(e){location.href=`monkeycode-serialize://${id}?error=${encodeURIComponent(String(e?.message||e))}`}}})()"#;
 
@@ -51,6 +55,7 @@ fn serialize_result(url: &Url) -> Option<Result<Option<(String, String)>, String
         all.clear()
     }
     let p = all.entry(key.clone()).or_insert_with(|| CaptureParts {
+        copy_to_clipboard: false,
         total: t,
         chunks: vec![None; t],
         bytes: 0,
@@ -124,6 +129,7 @@ fn png_data_url(bytes: &[u8]) -> Result<String, String> {
 }
 #[derive(Default)]
 struct CaptureParts {
+    copy_to_clipboard: bool,
     total: usize,
     chunks: Vec<Option<String>>,
     bytes: usize,
@@ -133,7 +139,7 @@ fn captures() -> &'static Mutex<HashMap<String, CaptureParts>> {
     CAPTURES.get_or_init(Default::default)
 }
 
-fn capture_result(url: &Url) -> Option<Result<Option<(String, String)>, String>> {
+fn capture_result(url: &Url) -> Option<Result<Option<(String, String, bool)>, String>> {
     if url.scheme() != CAPTURE_SCHEME {
         return None;
     }
@@ -151,6 +157,11 @@ fn capture_result(url: &Url) -> Option<Result<Option<(String, String)>, String>>
             error.chars().take(500).collect::<String>()
         )));
     }
+    let copy_to_clipboard = match q.get("copy").map(String::as_str) {
+        Some("1") => true,
+        Some("0") => false,
+        _ => return Some(Err("截图剪贴板参数无效".into())),
+    };
     let (index, total, data) = match (
         q.get("index").and_then(|x| x.parse::<usize>().ok()),
         q.get("total").and_then(|x| x.parse::<usize>().ok()),
@@ -170,11 +181,12 @@ fn capture_result(url: &Url) -> Option<Result<Option<(String, String)>, String>>
         all.clear()
     }
     let p = all.entry(id.into()).or_insert_with(|| CaptureParts {
+        copy_to_clipboard,
         total,
         chunks: vec![None; total],
         bytes: 0,
     });
-    if p.total != total {
+    if p.total != total || p.copy_to_clipboard != copy_to_clipboard {
         all.remove(id);
         return Some(Err("截图分片数量不一致".into()));
     }
@@ -188,8 +200,9 @@ fn capture_result(url: &Url) -> Option<Result<Option<(String, String)>, String>>
     }
     if p.chunks.iter().all(Option::is_some) {
         let joined = p.chunks.iter().map(|x| x.as_deref().unwrap()).collect();
+        let copy_to_clipboard = p.copy_to_clipboard;
         all.remove(id);
-        Some(Ok(Some((id.into(), joined))))
+        Some(Ok(Some((id.into(), joined, copy_to_clipboard))))
     } else {
         Some(Ok(None))
     }
@@ -388,7 +401,7 @@ window.__mcPreviewResultShow=data=>{
 };
 })()"#;
 
-const CAPTURE_JS: &str = r#"(()=>{const send=(id,q)=>{location.href=`monkeycode-capture://${id}?${q}`};window.__mcPreviewCapture=async(mode,id)=>{try{const root=document.documentElement,body=document.body;const w=mode==='full'?Math.max(root.scrollWidth,body?.scrollWidth||0,root.clientWidth):innerWidth;const h=mode==='full'?Math.max(root.scrollHeight,body?.scrollHeight||0,root.clientHeight):innerHeight;if(w<1||h<1||w*h>80000000)throw Error('页面尺寸无效或超过 8000 万像素');const clone=root.cloneNode(true);const sourceCanvases=[...root.querySelectorAll('canvas')],clonedCanvases=[...clone.querySelectorAll('canvas')];for(let i=0;i<clonedCanvases.length;i++){const source=sourceCanvases[i],canvas=clonedCanvases[i];if(!source||!canvas)continue;const image=document.createElement('img');image.src=source.toDataURL('image/png');image.width=source.width;image.height=source.height;for(const attr of canvas.attributes)image.setAttribute(attr.name,attr.value);image.style.cssText=canvas.style.cssText;canvas.replaceWith(image)}clone.querySelectorAll('script').forEach(x=>x.remove());clone.setAttribute('xmlns','http://www.w3.org/1999/xhtml');if(mode==='viewport'){clone.style.width=`${w}px`;clone.style.height=`${h}px`;clone.style.overflow='hidden';const b=clone.querySelector('body');if(b)b.style.transform=`translate(${-scrollX}px,${-scrollY}px)`}const xml=new XMLSerializer().serializeToString(clone);const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><foreignObject width="100%" height="100%">${xml}</foreignObject></svg>`;const img=new Image;await new Promise((ok,no)=>{img.onload=ok;img.onerror=()=>no(Error('页面含无法序列化的跨域资源'));img.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg)});const c=document.createElement('canvas');c.width=w;c.height=h;const ctx=c.getContext('2d');if(!ctx)throw Error('Canvas 不可用');ctx.drawImage(img,0,0);const png=c.toDataURL('image/png');const chunkSize=16000,total=Math.ceil(png.length/chunkSize);if(total<1||total>2048)throw Error('截图超过 24 MiB 限制');for(let i=0;i<total;i++){send(id,`index=${i}&total=${total}&data=${encodeURIComponent(png.slice(i*chunkSize,(i+1)*chunkSize))}`);await new Promise(ok=>setTimeout(ok,0))}}catch(e){send(id,`error=${encodeURIComponent(String(e?.message||e))}`)}}})()"#;
+const CAPTURE_JS: &str = r#"(()=>{const send=(id,q)=>{location.href=`monkeycode-capture://${id}?${q}`};window.__mcPreviewCapture=async(mode,id)=>{try{const viewport=mode==='viewport'||mode==='viewport-no-copy',copy=mode==='viewport-no-copy'?'0':'1';const root=document.documentElement,body=document.body;const w=mode==='full'?Math.max(root.scrollWidth,body?.scrollWidth||0,root.clientWidth):innerWidth;const h=mode==='full'?Math.max(root.scrollHeight,body?.scrollHeight||0,root.clientHeight):innerHeight;if(w<1||h<1||w*h>80000000)throw Error('页面尺寸无效或超过 8000 万像素');const clone=root.cloneNode(true);const sourceCanvases=[...root.querySelectorAll('canvas')],clonedCanvases=[...clone.querySelectorAll('canvas')];for(let i=0;i<clonedCanvases.length;i++){const source=sourceCanvases[i],canvas=clonedCanvases[i];if(!source||!canvas)continue;const image=document.createElement('img');image.src=source.toDataURL('image/png');image.width=source.width;image.height=source.height;for(const attr of canvas.attributes)image.setAttribute(attr.name,attr.value);image.style.cssText=canvas.style.cssText;canvas.replaceWith(image)}clone.querySelectorAll('script').forEach(x=>x.remove());clone.setAttribute('xmlns','http://www.w3.org/1999/xhtml');if(viewport){clone.style.width=`${w}px`;clone.style.height=`${h}px`;clone.style.overflow='hidden';const b=clone.querySelector('body');if(b)b.style.transform=`translate(${-scrollX}px,${-scrollY}px)`}const xml=new XMLSerializer().serializeToString(clone);const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><foreignObject width="100%" height="100%">${xml}</foreignObject></svg>`;const img=new Image;await new Promise((ok,no)=>{img.onload=ok;img.onerror=()=>no(Error('页面含无法序列化的跨域资源'));img.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg)});const c=document.createElement('canvas');c.width=w;c.height=h;const ctx=c.getContext('2d');if(!ctx)throw Error('Canvas 不可用');ctx.drawImage(img,0,0);const png=c.toDataURL('image/png');const chunkSize=16000,total=Math.ceil(png.length/chunkSize);if(total<1||total>2048)throw Error('截图超过 24 MiB 限制');for(let i=0;i<total;i++){send(id,`index=${i}&total=${total}&copy=${copy}&data=${encodeURIComponent(png.slice(i*chunkSize,(i+1)*chunkSize))}`);await new Promise(ok=>setTimeout(ok,0))}}catch(e){send(id,`error=${encodeURIComponent(String(e?.message||e))}`)}}})()"#;
 
 const PICKER_JS: &str = r#"(()=>{
 if(window.__mcPicker)return;
@@ -466,8 +479,11 @@ fn create_preview(
                         false
                     } else if let Some(result) = capture_result(url) {
                         match result {
-                            Ok(Some((request_id, data_url))) => {
-                                let clipboard_error = copy_capture_to_clipboard(&data_url).err();
+                            Ok(Some((request_id, data_url, copy_to_clipboard))) => {
+                                let clipboard_error = copy_to_clipboard
+                                    .then(|| copy_capture_to_clipboard(&data_url))
+                                    .transpose()
+                                    .err();
                                 let _ = callback_app.emit_to("main", "preview-captured", serde_json::json!({"requestId":request_id,"dataUrl":data_url,"clipboardError":clipboard_error}));
                             }
                             Ok(None) => {}
@@ -475,6 +491,7 @@ fn create_preview(
                         }
                         false
                     } else if let Some(result) = picker_result(url) {
+                        PICKER_ACTIVE.store(false, Ordering::Relaxed);
                         match result {
                             Ok(snapshot) => { let _ = callback_app.emit_to("main", "preview-element-picked", snapshot); }
                             Err(error) => { let _ = callback_app.emit_to("main", "preview-picker-error", error); }
@@ -490,7 +507,10 @@ fn create_preview(
                     }
                 })
                 .on_page_load(|webview, _| {
-                    let _ = webview.eval(PICKER_JS);
+                    let picker_active = PICKER_ACTIVE.load(Ordering::Relaxed);
+                    let _ = webview.eval(format!(
+                        "{PICKER_JS};window.__mcPicker.toggle({picker_active})"
+                    ));
                     let _ = webview.eval(CAPTURE_JS);
                     let _ = webview.eval(SERIALIZE_JS);
                 }),
@@ -580,6 +600,7 @@ pub fn preview_set_zoom(app: AppHandle, scale: f64) -> Result<(), String> {
 }
 #[tauri::command]
 pub fn preview_destroy(app: AppHandle) -> Result<(), String> {
+    PICKER_ACTIVE.store(false, Ordering::Relaxed);
     if let Some(v) = app.get_webview(LABEL) {
         v.close().map_err(|e| e.to_string())?
     }
@@ -626,7 +647,9 @@ pub fn preview_picker_toggle(app: AppHandle, enabled: bool) -> Result<(), String
     let arg = serde_json::to_string(&enabled).unwrap();
     webview(&app)?
         .eval(format!("{PICKER_JS};window.__mcPicker.toggle({arg})"))
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    PICKER_ACTIVE.store(enabled, Ordering::Relaxed);
+    Ok(())
 }
 #[tauri::command]
 pub fn preview_element_apply(app: AppHandle, edit: ElementEdit) -> Result<(), String> {
@@ -808,6 +831,7 @@ mod native_capture {
         app: AppHandle,
         request_id: String,
         original_frame: Option<objc2_foundation::NSRect>,
+        copy_to_clipboard: bool,
     ) {
         let mtm = MainThreadMarker::new().expect("WKWebView callback must run on the main thread");
         // SAFETY: construction occurs on the main thread required by WebKit.
@@ -830,15 +854,23 @@ mod native_capture {
             let result = image_data_url(unsafe { &*image });
             match result {
                 Ok(data_url) => {
-                    // Deliver the result before the best-effort clipboard operation.
+                    let clipboard_error = copy_to_clipboard
+                        .then(|| super::copy_capture_to_clipboard(&data_url))
+                        .transpose()
+                        .err()
+                        .map(|error| {
+                            eprintln!("design preview clipboard copy failed: {error}");
+                            error
+                        });
                     let _ = app.emit_to(
                         "main",
                         "preview-captured",
-                        serde_json::json!({"requestId": request_id, "dataUrl": data_url}),
+                        serde_json::json!({
+                            "requestId": request_id,
+                            "dataUrl": data_url,
+                            "clipboardError": clipboard_error,
+                        }),
                     );
-                    if let Err(error) = super::copy_capture_to_clipboard(&data_url) {
-                        eprintln!("design preview clipboard copy failed: {error}");
-                    }
                 }
                 Err(error) => emit_error(&app, &request_id, error),
             }
@@ -850,6 +882,7 @@ mod native_capture {
     }
 
     pub(super) fn start(app: AppHandle, mode: String, request_id: String) -> Result<(), String> {
+        let copy_to_clipboard = mode != "viewport-no-copy";
         let Some(webview) = app.get_webview(LABEL) else {
             emit_error(&app, &request_id, "预览尚未创建".into());
             return Ok(());
@@ -866,12 +899,12 @@ mod native_capture {
                 emit_error(&callback_app, &request_id, "无法获取 WKWebView".into());
                 return;
             };
-            if mode == "viewport" {
+            if mode == "viewport" || mode == "viewport-no-copy" {
                 let bounds = view.bounds();
                 if let Err(error) = validate_capture_size(bounds.size.width, bounds.size.height) {
                     emit_error(&callback_app, &request_id, error);
                 } else {
-                    snapshot(view, callback_app, request_id, None);
+                    snapshot(view, callback_app, request_id, None, copy_to_clipboard);
                 }
                 return;
             }
@@ -919,7 +952,7 @@ mod native_capture {
                 restore.size.width = plan.restore.0;
                 restore.size.height = plan.restore.1;
                 size_view.setFrame(expanded);
-                snapshot(size_view.clone(), size_app.clone(), size_id.clone(), Some(restore));
+                snapshot(size_view.clone(), size_app.clone(), size_id.clone(), Some(restore), true);
             });
             let script = NSString::from_str(
                 "JSON.stringify({width:Math.max(document.documentElement.scrollWidth,document.body?.scrollWidth||0,document.documentElement.clientWidth),height:Math.max(document.documentElement.scrollHeight,document.body?.scrollHeight||0,document.documentElement.clientHeight)})",
@@ -942,7 +975,7 @@ mod native_capture {
 
 #[tauri::command]
 pub fn preview_capture(app: AppHandle, mode: String, request_id: String) -> Result<(), String> {
-    if !matches!(mode.as_str(), "viewport" | "full")
+    if !matches!(mode.as_str(), "viewport" | "viewport-no-copy" | "full")
         || request_id.len() != 32
         || !request_id.bytes().all(|b| b.is_ascii_hexdigit())
     {
@@ -1011,6 +1044,27 @@ mod tests {
     fn capture_rejects_bad_id() {
         let u = Url::parse("monkeycode-capture://bad?index=0&total=1&data=x").unwrap();
         assert!(capture_result(&u).unwrap().is_err());
+    }
+    #[test]
+    fn capture_preserves_clipboard_mode() {
+        assert!(CAPTURE_JS.contains("mode==='viewport'||mode==='viewport-no-copy'"));
+        let id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let no_copy = Url::parse(&format!(
+            "monkeycode-capture://{id}?index=0&total=1&copy=0&data=x"
+        ))
+        .unwrap();
+        assert_eq!(
+            capture_result(&no_copy).unwrap().unwrap(),
+            Some((id.into(), "x".into(), false))
+        );
+        let copy = Url::parse(&format!(
+            "monkeycode-capture://{id}?index=0&total=1&copy=1&data=x"
+        ))
+        .unwrap();
+        assert_eq!(
+            capture_result(&copy).unwrap().unwrap(),
+            Some((id.into(), "x".into(), true))
+        );
     }
     #[test]
     fn serialization_rejects_bad_transport() {
