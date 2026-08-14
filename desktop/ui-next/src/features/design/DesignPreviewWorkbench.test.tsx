@@ -386,11 +386,24 @@ describe("DesignPreviewWorkbench native lifecycle", () => {
     const panel = await screen.findByRole("dialog", { name: "Selected element" });
     expect(panel.style.left).toContain("110px");
     expect(panel.style.top).toContain("58px");
+    expect(panel.style.maxHeight).toBe("calc(100% - 70px)");
+    expect(panel.className).toContain("overflow-auto");
     const background = panel.parentElement?.querySelector("img");
     expect(background?.style.left).toBe("100px");
     expect(background?.style.top).toBe("20px");
     expect(background?.style.width).toBe("390px");
     expect(background?.style.height).toBe("380px");
+  });
+
+  it("keeps the selected-element panel visible for elements near the overlay bottom", async () => {
+    mount();
+    await userEvent.click(screen.getByRole("button", { name: /Edit/ }));
+    await waitFor(() => expect(events.has("preview-element-picked")).toBe(true));
+    act(() => events.get("preview-element-picked")?.({ payload: { selector: "#footer", text: "Footer", tag: "DIV", bounds: { x: 10, y: 370, width: 100, height: 20 }, styles: {} } }));
+
+    const panel = await screen.findByRole("dialog", { name: "Selected element" });
+    expect(panel.style.top).toBe("228px");
+    expect(panel.style.maxHeight).toBe("calc(100% - 240px)");
   });
 
   it("keeps the wider selected-element panel inside the preview overlay", async () => {

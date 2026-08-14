@@ -553,12 +553,12 @@ export function DesignPreviewWorkbench({
   const updateElementDraft = (property: "text" | StyleProperty, value: string) => {
     setElementDraft((draft) => draft ? { ...draft, [property]: value } : draft);
   };
+  const overlayBounds = overlayRef.current?.getBoundingClientRect();
   const selectedPreviewPosition = (() => {
     const hostRect = hostRef.current?.getBoundingClientRect();
-    const overlayRect = overlayRef.current?.getBoundingClientRect();
     return {
-      left: (hostRect?.left ?? 0) - (overlayRect?.left ?? 0),
-      top: (hostRect?.top ?? 0) - (overlayRect?.top ?? 0),
+      left: (hostRect?.left ?? 0) - (overlayBounds?.left ?? 0),
+      top: (hostRect?.top ?? 0) - (overlayBounds?.top ?? 0),
       width: hostRect?.width ?? 0,
       height: hostRect?.height ?? 0,
     };
@@ -567,11 +567,16 @@ export function DesignPreviewWorkbench({
     left: selectedPreviewPosition.left + (picked?.bounds.x ?? 0),
     top: selectedPreviewPosition.top + (picked?.bounds.y ?? 0) + (picked?.bounds.height ?? 0) + 8,
   };
-  const overlayWidth = overlayRef.current?.getBoundingClientRect().width ?? 0;
+  const overlayWidth = overlayBounds?.width ?? 0;
+  const overlayHeight = overlayBounds?.height ?? 0;
   const selectedElementDialogWidth = Math.min(352, Math.max(0, overlayWidth - 24));
   const selectedElementDialogLeft = Math.max(12, overlayWidth > 0
     ? Math.min(selectedElementPosition.left, overlayWidth - selectedElementDialogWidth - 12)
     : selectedElementPosition.left);
+  const selectedElementDialogMinHeight = Math.min(160, Math.max(0, overlayHeight - 24));
+  const selectedElementDialogTop = Math.max(12, overlayHeight > 0
+    ? Math.min(selectedElementPosition.top, overlayHeight - selectedElementDialogMinHeight - 12)
+    : selectedElementPosition.top);
 
   return (
     <aside ref={paneRef} aria-label={t("design.preview.workbench")} style={{ width: paneWidth }} className="relative flex min-w-80 shrink-0 flex-col border-s border-base-300 bg-base-100">
@@ -650,8 +655,8 @@ export function DesignPreviewWorkbench({
           <div
             role="dialog"
             aria-label={t("design.preview.element")}
-            className="pointer-events-auto absolute max-h-[calc(100%-1.5rem)] w-[352px] max-w-[calc(100%-1.5rem)] overflow-auto rounded-box border border-primary/25 bg-base-100 p-4 shadow-2xl ring-1 ring-primary/10"
-            style={{ left: selectedElementDialogLeft, top: Math.max(12, selectedElementPosition.top) }}
+            className="pointer-events-auto absolute w-[352px] max-w-[calc(100%-1.5rem)] overflow-auto rounded-box border border-primary/25 bg-base-100 p-4 shadow-2xl ring-1 ring-primary/10"
+            style={{ left: selectedElementDialogLeft, top: selectedElementDialogTop, maxHeight: `calc(100% - ${selectedElementDialogTop + 12}px)` }}
           >
             <div className="flex items-start gap-3">
               <div className="flex size-8 shrink-0 items-center justify-center rounded-field bg-primary/12 text-primary">
