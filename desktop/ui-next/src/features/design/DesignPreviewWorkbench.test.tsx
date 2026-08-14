@@ -458,25 +458,45 @@ describe("DesignPreviewWorkbench native lifecycle", () => {
     ]);
   });
 
+  it("opens the color palette beside its trigger", async () => {
+    mount();
+    await userEvent.click(screen.getByRole("button", { name: /Edit/ }));
+    await waitFor(() => expect(events.has("preview-element-picked")).toBe(true));
+    act(() => events.get("preview-element-picked")?.({ payload: {
+      selector: "#hero", text: "Hello", tag: "DIV", bounds: { x: 0, y: 0, width: 100, height: 20 },
+      styles: { color: "#336699" },
+    } }));
+    const panel = await screen.findByRole("dialog", { name: "Selected element" });
+    const trigger = within(panel).getByRole("button", { name: "Text color picker" });
+    vi.spyOn(trigger, "getBoundingClientRect").mockReturnValue({ x: 900, y: 200, left: 900, top: 200, right: 916, bottom: 216, width: 16, height: 16, toJSON() {} });
+
+    await userEvent.click(trigger);
+
+    const palette = screen.getByRole("dialog", { name: "Text color palette" });
+    expect(palette.style.left).toBe("684px");
+    expect(palette.style.top).toBe("200px");
+  });
+
   it("supports both color pickers and typed color values", async () => {
     mount();
     await userEvent.click(screen.getByRole("button", { name: /Edit/ }));
     await waitFor(() => expect(events.has("preview-element-picked")).toBe(true));
     act(() => events.get("preview-element-picked")?.({ payload: {
       selector: "#hero", text: "Hello", tag: "DIV", bounds: { x: 0, y: 0, width: 100, height: 20 },
-      styles: { color: "rgb(38, 34, 26)", backgroundColor: "rgba(0, 0, 0, 0)", borderColor: "#000000" },
+      styles: { color: "#ff0000", backgroundColor: "rgba(0, 0, 0, 0)", borderColor: "#000000" },
     } }));
     const panel = await screen.findByRole("dialog", { name: "Selected element" });
 
-    fireEvent.change(within(panel).getByLabelText("Text color picker"), { target: { value: "#336699" } });
-    expect((within(panel).getByLabelText("Text color") as HTMLInputElement).value).toBe("#336699");
+    await userEvent.click(within(panel).getByRole("button", { name: "Text color picker" }));
+    fireEvent.change(screen.getByLabelText("Text color hue"), { target: { value: "120" } });
+    expect((within(panel).getByLabelText("Text color") as HTMLInputElement).value).toBe("#00ff00");
     await userEvent.clear(within(panel).getByLabelText("Color"));
     await userEvent.type(within(panel).getByLabelText("Color"), "rgb(10, 20, 30)");
     await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
 
     const edits = calls.filter((call) => call.cmd === "preview_element_apply").map((call) => call.args?.edit);
     expect(edits).toEqual([
-      { selector: "#hero", property: "color", value: "#336699" },
+      { selector: "#hero", property: "color", value: "#00ff00" },
       { selector: "#hero", property: "borderColor", value: "rgb(10, 20, 30)" },
     ]);
   });

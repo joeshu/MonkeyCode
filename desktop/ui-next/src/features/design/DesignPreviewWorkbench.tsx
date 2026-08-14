@@ -4,6 +4,7 @@ import {
   IconSend, IconSquare, IconTrash, IconX, IconFolder, IconCheck, IconChevronDown,
 } from "@tabler/icons-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { createPortal } from "react-dom";
 
 import type { ComposerCtl } from "@/features/chat/composer/useComposer";
 import { CodeView } from "@/features/files/CodeView";
@@ -136,23 +137,125 @@ function pickerColorOf(value: string) {
   return `#${rgb.slice(1, 4).map((part) => Math.min(255, Math.max(0, Math.round(Number(part)))).toString(16).padStart(2, "0")).join("")}`;
 }
 
+function hsvOf(hex: string) {
+  const red = parseInt(hex.slice(1, 3), 16) / 255;
+  const green = parseInt(hex.slice(3, 5), 16) / 255;
+  const blue = parseInt(hex.slice(5, 7), 16) / 255;
+  const max = Math.max(red, green, blue);
+  const delta = max - Math.min(red, green, blue);
+  let hue = 0;
+  if (delta) {
+    if (max === red) hue = 60 * (((green - blue) / delta) % 6);
+    else if (max === green) hue = 60 * ((blue - red) / delta + 2);
+    else hue = 60 * ((red - green) / delta + 4);
+  }
+  return { hue: hue < 0 ? hue + 360 : hue, saturation: max ? delta / max : 0, value: max };
+}
+
+function hexOf(hue: number, saturation: number, value: number) {
+  const chroma = value * saturation;
+  const x = chroma * (1 - Math.abs((hue / 60) % 2 - 1));
+  const [red, green, blue] = hue < 60 ? [chroma, x, 0] : hue < 120 ? [x, chroma, 0] : hue < 180 ? [0, chroma, x] : hue < 240 ? [0, x, chroma] : hue < 300 ? [x, 0, chroma] : [chroma, 0, x];
+  const offset = value - chroma;
+  return `#${[red, green, blue].map((part) => Math.round((part + offset) * 255).toString(16).padStart(2, "0")).join("")}`;
+}
+
+const COLOR_PALETTE_WIDTH = 208;
+const COLOR_PALETTE_HEIGHT = 200;
+
 function ElementColorInput({ label, value, onChange }: { label: string; value: string; onChange(value: string): void }) {
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState({ left: 0, top: 0 });
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const paletteRef = useRef<HTMLDivElement>(null);
+  const hsv = useMemo(() => hsvOf(pickerColorOf(value)), [value]);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: globalThis.PointerEvent) => {
+      const target = event.target as Node;
+      if (!triggerRef.current?.contains(target) && !paletteRef.current?.contains(target)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
+  }, [open]);
+
+  const openPalette = () => {
+    const bounds = triggerRef.current?.getBoundingClientRect();
+    if (!bounds) return;
+    const right = bounds.right + 8;
+    const left = right + COLOR_PALETTE_WIDTH <= window.innerWidth - 8 ? right : Math.max(8, bounds.left - COLOR_PALETTE_WIDTH - 8);
+    const top = Math.min(Math.max(8, bounds.top), Math.max(8, window.innerHeight - COLOR_PALETTE_HEIGHT - 8));
+    setPosition({ left, top });
+    setOpen((current) => !current);
+  };
+
+  const updateSaturationValue = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const saturation = Math.min(1, Math.max(0, (event.clientX - bounds.left) / bounds.width));
+    const brightness = Math.min(1, Math.max(0, 1 - (event.clientY - bounds.top) / bounds.height));
+    onChange(hexOf(hsv.hue, saturation, brightness));
+  };
+
   return <div className="input input-xs flex min-w-0 items-center gap-1.5 px-2 text-[10px] text-base-content/50">
     <span className="shrink-0">{label}</span>
     <input aria-label={label} className="min-w-0 flex-1 text-right text-xs text-base-content" value={value} onChange={(event) => onChange(event.target.value)} />
-    <span
+    <button
+      ref={triggerRef}
+      type="button"
+      aria-label={`${label} picker`}
+      aria-haspopup="dialog"
+      aria-expanded={open}
       className="relative size-4 shrink-0 overflow-hidden rounded border border-base-content/20 shadow-inner"
       style={{ backgroundImage: "linear-gradient(45deg, #ddd 25%, transparent 25%), linear-gradient(-45deg, #ddd 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #ddd 75%), linear-gradient(-45deg, transparent 75%, #ddd 75%)", backgroundPosition: "0 0, 0 4px, 4px -4px, -4px 0", backgroundSize: "8px 8px" }}
+      onClick={openPalette}
     >
       <span className="absolute inset-0" style={{ backgroundColor: value }} />
+    </button>
+    {open && createPortal(<div
+      ref={paletteRef}
+      role="dialog"
+      aria-label={`${label} palette`}
+      className="fixed z-[100] w-[208px] rounded-box border border-base-300 bg-base-100 p-3 text-base-content shadow-2xl"
+      style={position}
+      onKeyDown={(event) => { if (event.key === "Escape") { setOpen(false); triggerRef.current?.focus(); } }}
+    >
+      <div
+        role="slider"
+        tabIndex={0}
+        aria-label={`${label} saturation and brightness`}
+        aria-valuetext={`${Math.round(hsv.saturation * 100)}% saturation, ${Math.round(hsv.value * 100)}% brightness`}
+        className="relative h-28 w-full cursor-crosshair overflow-hidden rounded-field"
+        style={{ backgroundColor: `hsl(${hsv.hue} 100% 50%)`, backgroundImage: "linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, transparent)" }}
+        onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); updateSaturationValue(event); }}
+        onPointerMove={(event) => { if (event.currentTarget.hasPointerCapture(event.pointerId)) updateSaturationValue(event); }}
+        onKeyDown={(event) => {
+          const step = event.shiftKey ? 0.1 : 0.01;
+          if (event.key === "ArrowLeft") onChange(hexOf(hsv.hue, Math.max(0, hsv.saturation - step), hsv.value));
+          else if (event.key === "ArrowRight") onChange(hexOf(hsv.hue, Math.min(1, hsv.saturation + step), hsv.value));
+          else if (event.key === "ArrowDown") onChange(hexOf(hsv.hue, hsv.saturation, Math.max(0, hsv.value - step)));
+          else if (event.key === "ArrowUp") onChange(hexOf(hsv.hue, hsv.saturation, Math.min(1, hsv.value + step)));
+          else return;
+          event.preventDefault();
+        }}
+      >
+        <span className="pointer-events-none absolute size-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow" style={{ left: `${hsv.saturation * 100}%`, top: `${(1 - hsv.value) * 100}%` }} />
+      </div>
       <input
-        type="color"
-        aria-label={`${label} picker`}
-        className="absolute inset-0 size-full cursor-pointer opacity-0"
-        value={pickerColorOf(value)}
-        onChange={(event) => onChange(event.target.value)}
+        type="range"
+        aria-label={`${label} hue`}
+        min="0"
+        max="359"
+        value={Math.round(hsv.hue)}
+        className="mt-3 h-3 w-full cursor-pointer appearance-none rounded-full"
+        style={{ background: "linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)" }}
+        onChange={(event) => onChange(hexOf(Number(event.target.value), hsv.saturation, hsv.value))}
       />
-    </span>
+      <div className="mt-3 flex items-center gap-2">
+        <span className="size-6 shrink-0 rounded-field border border-base-300" style={{ backgroundColor: pickerColorOf(value) }} />
+        <output className="min-w-0 flex-1 font-mono text-xs">{pickerColorOf(value)}</output>
+      </div>
+    </div>, document.body)}
   </div>;
 }
 
