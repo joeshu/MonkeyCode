@@ -414,12 +414,19 @@ describe("DesignPreviewWorkbench native lifecycle", () => {
       events.get("preview-element-picked")?.({ payload: { selector: "#hero", text: "Hello", tag: "DIV", bounds: { x: 0, y: 0, width: 10, height: 10 }, styles: {} } });
     });
     expect(await screen.findByText(/DIV · #hero/)).toBeTruthy();
+    const propertyPicker = screen.getByLabelText("Element property");
+    expect(propertyPicker.tagName).toBe("SUMMARY");
+    await userEvent.click(propertyPicker);
+    expect(screen.getByRole("option", { name: "Background color" })).toBeTruthy();
+    await userEvent.click(propertyPicker);
     await userEvent.clear(screen.getByLabelText("Property value"));
     await userEvent.type(screen.getByLabelText("Property value"), "Updated");
     await userEvent.click(screen.getByRole("button", { name: "Apply" }));
     await waitFor(() => expect(calls.some((c) => c.cmd === "preview_element_apply" && (c.args?.edit as { value?: string }).value === "Updated")).toBe(true));
+    await waitFor(() => expect(calls.filter((c) => c.cmd === "preview_capture" && c.args?.mode === "viewport-no-copy")).toHaveLength(2));
     await userEvent.click(screen.getByRole("button", { name: /Undo/ }));
     expect(calls.some((c) => c.cmd === "preview_element_undo")).toBe(true);
+    await waitFor(() => expect(calls.filter((c) => c.cmd === "preview_capture" && c.args?.mode === "viewport-no-copy")).toHaveLength(3));
   });
 
   it("shows a rectangle while it is being dragged", async () => {
@@ -441,14 +448,13 @@ describe("DesignPreviewWorkbench native lifecycle", () => {
     expect(surface.querySelector("rect")).toBeNull();
   });
 
-  it("opens an inline editor and places its text on the capture", async () => {
+  it("opens and focuses the inline editor as soon as the text tool is selected", async () => {
     mount();
     await userEvent.click(screen.getByRole("button", { name: /Mark/ }));
     await userEvent.click(await screen.findByRole("button", { name: "Text" }));
 
-    const surface = screen.getByLabelText("Annotation surface");
-    fireEvent.pointerDown(surface, { clientX: 460, clientY: 200 });
     const input = screen.getByLabelText("Annotation text");
+    expect(document.activeElement).toBe(input);
     await userEvent.type(input, "Move this section{Enter}");
 
     expect(screen.getByText("Move this section")).toBeTruthy();

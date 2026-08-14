@@ -1,7 +1,7 @@
 import {
   IconArrowBackUp, IconBrowser, IconCamera, IconCode, IconDeviceDesktop, IconDeviceMobile,
   IconDeviceTablet, IconDownload, IconMessage, IconPencil, IconPointer, IconRefresh,
-  IconSend, IconSquare, IconTrash, IconX, IconFolder,
+  IconSend, IconSquare, IconTrash, IconX, IconFolder, IconCheck, IconChevronDown,
 } from "@tabler/icons-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 
@@ -126,6 +126,7 @@ export function DesignPreviewWorkbench({
   pickerRef.current = picker;
   const pickerCommandRef = useRef<Promise<void>>(Promise.resolve());
   const overlayRef = useRef<HTMLDivElement>(null);
+  const propertyMenuRef = useRef<HTMLDetailsElement>(null);
   const [picked, setPicked] = useState<ElementSnapshot | null>(null);
   const pickedRef = useRef<ElementSnapshot | null>(null);
   pickedRef.current = picked;
@@ -465,10 +466,27 @@ export function DesignPreviewWorkbench({
     }
     finally { feedbackSendingRef.current = false; setFeedbackSending(false); }
   };
+  const refreshPickedPreview = async (selected: ElementSnapshot) => {
+    const selectedTarget = latestRef.current.targetKey;
+    const result = await requestCapture("viewport-no-copy");
+    if (pickedRef.current === selected && latestRef.current.targetKey === selectedTarget) setPickedPreview(result.dataUrl);
+  };
   const applyEdit = async () => {
     if (!picked) return;
-    try { await previewElementApply({ selector: picked.selector, property, value: property === "delete" ? "" : value }); setStatus(t("design.preview.applied")); }
-    catch (error) { report(error); }
+    const selected = picked;
+    try {
+      await previewElementApply({ selector: selected.selector, property, value: property === "delete" ? "" : value });
+      await refreshPickedPreview(selected);
+      setStatus(t("design.preview.applied"));
+    } catch (error) { report(error); }
+  };
+  const undoEdit = async () => {
+    if (!picked) return;
+    const selected = picked;
+    try {
+      await previewElementUndo();
+      await refreshPickedPreview(selected);
+    } catch (error) { report(error); }
   };
   const selectedPreviewPosition = (() => {
     const hostRect = hostRef.current?.getBoundingClientRect();
@@ -489,6 +507,16 @@ export function DesignPreviewWorkbench({
   const selectedElementDialogLeft = Math.max(12, overlayWidth > 0
     ? Math.min(selectedElementPosition.left, overlayWidth - selectedElementDialogWidth - 12)
     : selectedElementPosition.left);
+  const propertyOptions = [
+    ["text", t("design.preview.property.text")],
+    ["color", t("design.preview.property.color")],
+    ["backgroundColor", t("design.preview.property.background")],
+    ["fontSize", t("design.preview.property.fontSize")],
+    ["opacity", t("design.preview.property.opacity")],
+    ["borderRadius", t("design.preview.property.borderRadius")],
+    ["delete", t("design.preview.property.delete")],
+  ] as const;
+  const propertyLabel = propertyOptions.find(([name]) => name === property)?.[1] ?? propertyOptions[0][1];
 
   return (
     <aside ref={paneRef} aria-label={t("design.preview.workbench")} style={{ width: paneWidth }} className="relative flex min-w-80 shrink-0 flex-col border-s border-base-300 bg-base-100">
@@ -595,11 +623,31 @@ export function DesignPreviewWorkbench({
               </label>
               <div className="mt-3 flex justify-end border-t border-base-300 pt-3"><button className="btn btn-primary btn-sm min-w-28" disabled={feedbackSending || !commentText.trim()} onClick={() => void submitElementComment()}><IconSend size={14} /> {t("design.preview.sendComment")}</button></div>
             </> : <>
-              <select aria-label={t("design.preview.elementProperty")} className="select select-sm mt-3 w-full" value={property} onChange={(e) => { setProperty(e.target.value); setValue(e.target.value === "text" ? picked.text : ""); }}>
-                <option value="text">{t("design.preview.property.text")}</option><option value="color">{t("design.preview.property.color")}</option><option value="backgroundColor">{t("design.preview.property.background")}</option><option value="fontSize">{t("design.preview.property.fontSize")}</option><option value="opacity">{t("design.preview.property.opacity")}</option><option value="borderRadius">{t("design.preview.property.borderRadius")}</option><option value="delete">{t("design.preview.property.delete")}</option>
-              </select>
+              <details ref={propertyMenuRef} className="dropdown mt-3 w-full">
+                <summary aria-label={t("design.preview.elementProperty")} className="btn h-10 min-h-10 w-full justify-between border-base-300 bg-base-100 px-3 font-normal shadow-none hover:border-primary/40 hover:bg-base-200/60">
+                  <span className="truncate">{propertyLabel}</span>
+                  <IconChevronDown size={15} stroke={1.75} className="shrink-0 text-base-content/50" />
+                </summary>
+                <ul role="listbox" className="menu dropdown-content z-20 mt-1 max-h-56 w-full flex-nowrap overflow-auto rounded-box border border-base-300 bg-base-100 p-1.5 shadow-xl">
+                  {propertyOptions.map(([name, label]) => <li key={name}>
+                    <button
+                      role="option"
+                      aria-selected={property === name}
+                      className={`min-h-8 justify-between rounded-field px-2.5 text-xs ${property === name ? "menu-active font-medium" : ""}`}
+                      onClick={() => {
+                        setProperty(name);
+                        setValue(name === "text" ? picked.text : "");
+                        propertyMenuRef.current?.removeAttribute("open");
+                      }}
+                    >
+                      <span>{label}</span>
+                      {property === name && <IconCheck size={14} stroke={2} className="text-primary" />}
+                    </button>
+                  </li>)}
+                </ul>
+              </details>
               {property !== "delete" && <textarea aria-label={t("design.preview.elementValue")} className="textarea textarea-sm mt-2 w-full" value={value} onChange={(e) => setValue(e.target.value)} />}
-              <div className="mt-2 flex gap-2"><button className="btn btn-primary btn-sm" onClick={() => void applyEdit()}>{t("design.preview.apply")}</button><button className="btn btn-ghost btn-sm" onClick={() => void previewElementUndo().catch(report)}><IconArrowBackUp size={14} /> {t("design.preview.undo")}</button></div>
+              <div className="mt-2 flex gap-2"><button className="btn btn-primary btn-sm" onClick={() => void applyEdit()}>{t("design.preview.apply")}</button><button className="btn btn-ghost btn-sm" onClick={() => void undoEdit()}><IconArrowBackUp size={14} /> {t("design.preview.undo")}</button></div>
             </>}
           </div>
           </div>
@@ -607,7 +655,7 @@ export function DesignPreviewWorkbench({
         {capture && (
           <div className="absolute inset-0 z-20 flex flex-col bg-base-200 p-2">
             <div className="flex shrink-0 flex-wrap items-center gap-1 pb-2">
-              {([['rect', IconSquare], ['pen', IconPencil], ['text', IconCode]] as const).map(([name, Icon]) => <button key={name} className={`btn btn-xs ${tool === name ? "btn-active" : "btn-ghost"}`} onClick={() => { setTool(name); setTextDraft(null); }}><Icon size={13} /> {t(`design.preview.capture.${name}` as MessageKey)}</button>)}
+              {([['rect', IconSquare], ['pen', IconPencil], ['text', IconCode]] as const).map(([name, Icon]) => <button key={name} className={`btn btn-xs ${tool === name ? "btn-active" : "btn-ghost"}`} onClick={() => { setTool(name); setTextDraft(name === "text" ? { x: 50, y: 50, text: "" } : null); }}><Icon size={13} /> {t(`design.preview.capture.${name}` as MessageKey)}</button>)}
               <button className="btn btn-ghost btn-xs ms-auto" onClick={() => setAnnotations((a) => a.slice(0, -1))}><IconArrowBackUp size={13} /> {t("design.preview.undo")}</button>
               <button className="btn btn-ghost btn-xs" onClick={() => setAnnotations([])}><IconTrash size={13} /> {t("design.preview.capture.clear")}</button>
               <button className="btn btn-ghost btn-xs" onClick={() => void downloadAnnotated(capture, annotations).catch(report)}><IconDownload size={13} /> {t("design.preview.capture.download")}</button>
