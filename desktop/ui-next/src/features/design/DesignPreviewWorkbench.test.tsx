@@ -434,12 +434,14 @@ describe("DesignPreviewWorkbench native lifecycle", () => {
     expect((within(panel).getByLabelText("Width") as HTMLInputElement).value).toBe("516.5px");
     await userEvent.clear(within(panel).getByLabelText("Width"));
     await userEvent.type(within(panel).getByLabelText("Width"), "640px");
-    await userEvent.selectOptions(within(panel).getByLabelText("Justify"), "space-between");
+    await userEvent.click(within(panel).getByRole("button", { name: "Justify" }));
+    await userEvent.click(within(panel).getByRole("option", { name: "space-between" }));
     await userEvent.clear(within(panel).getByLabelText("Padding Top"));
     await userEvent.type(within(panel).getByLabelText("Padding Top"), "12px");
     await userEvent.clear(within(panel).getByLabelText("Fill"));
     await userEvent.type(within(panel).getByLabelText("Fill"), "#ffffff");
-    await userEvent.selectOptions(within(panel).getByLabelText("Style"), "solid");
+    await userEvent.click(within(panel).getByRole("button", { name: "Style" }));
+    await userEvent.click(within(panel).getByRole("option", { name: "solid" }));
     await userEvent.clear(within(panel).getByLabelText("Radius"));
     await userEvent.type(within(panel).getByLabelText("Radius"), "8px");
     await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
@@ -453,6 +455,29 @@ describe("DesignPreviewWorkbench native lifecycle", () => {
       { selector: "#hero", property: "paddingTop", value: "12px" },
       { selector: "#hero", property: "borderStyle", value: "solid" },
       { selector: "#hero", property: "borderRadius", value: "8px" },
+    ]);
+  });
+
+  it("supports both color pickers and typed color values", async () => {
+    mount();
+    await userEvent.click(screen.getByRole("button", { name: /Edit/ }));
+    await waitFor(() => expect(events.has("preview-element-picked")).toBe(true));
+    act(() => events.get("preview-element-picked")?.({ payload: {
+      selector: "#hero", text: "Hello", tag: "DIV", bounds: { x: 0, y: 0, width: 100, height: 20 },
+      styles: { color: "rgb(38, 34, 26)", backgroundColor: "rgba(0, 0, 0, 0)", borderColor: "#000000" },
+    } }));
+    const panel = await screen.findByRole("dialog", { name: "Selected element" });
+
+    fireEvent.change(within(panel).getByLabelText("Text color picker"), { target: { value: "#336699" } });
+    expect((within(panel).getByLabelText("Text color") as HTMLInputElement).value).toBe("#336699");
+    await userEvent.clear(within(panel).getByLabelText("Color"));
+    await userEvent.type(within(panel).getByLabelText("Color"), "rgb(10, 20, 30)");
+    await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
+
+    const edits = calls.filter((call) => call.cmd === "preview_element_apply").map((call) => call.args?.edit);
+    expect(edits).toEqual([
+      { selector: "#hero", property: "color", value: "#336699" },
+      { selector: "#hero", property: "borderColor", value: "rgb(10, 20, 30)" },
     ]);
   });
 

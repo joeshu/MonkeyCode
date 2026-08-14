@@ -1,7 +1,7 @@
 import {
   IconArrowBackUp, IconBrowser, IconCamera, IconCode, IconDeviceDesktop, IconDeviceMobile,
   IconDeviceTablet, IconDownload, IconMessage, IconPencil, IconPointer, IconRefresh,
-  IconSend, IconSquare, IconTrash, IconX, IconFolder,
+  IconSend, IconSquare, IconTrash, IconX, IconFolder, IconCheck, IconChevronDown,
 } from "@tabler/icons-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 
@@ -48,6 +48,113 @@ function elementDraftOf(snapshot: ElementSnapshot): ElementDraft {
 }
 
 const PRESETS = { desktop: 1280, tablet: 768, mobile: 390 } as const;
+
+function ElementSelect({
+  label, value, options, onChange, openAbove = false,
+}: {
+  label: string;
+  value: string;
+  options: readonly string[];
+  onChange(value: string): void;
+  openAbove?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const displayedOptions = options.includes(value) ? options : [value, ...options];
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", close);
+    requestAnimationFrame(() => rootRef.current?.querySelector<HTMLElement>("[role=option][aria-selected=true]")?.focus());
+    return () => document.removeEventListener("pointerdown", close);
+  }, [open]);
+
+  const moveFocus = (current: HTMLElement, offset: number) => {
+    const optionElements = [...(rootRef.current?.querySelectorAll<HTMLElement>("[role=option]") ?? [])];
+    const index = optionElements.indexOf(current);
+    optionElements[(index + offset + optionElements.length) % optionElements.length]?.focus();
+  };
+
+  return <div ref={rootRef} className="relative min-w-0" onBlur={(event) => {
+    if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
+  }}>
+    <button
+      ref={triggerRef}
+      type="button"
+      aria-label={label}
+      aria-haspopup="listbox"
+      aria-expanded={open}
+      className={`flex h-6 w-full min-w-0 items-center gap-1.5 rounded-field border bg-base-100 px-2 text-left transition-colors ${open ? "border-primary ring-2 ring-primary/10" : "border-base-300 hover:border-base-content/30"}`}
+      onClick={() => setOpen((current) => !current)}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") setOpen(false);
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          event.preventDefault();
+          setOpen(true);
+        }
+      }}
+    >
+      <span className="shrink-0 text-[10px] text-base-content/50">{label}</span>
+      <span className="min-w-0 flex-1 truncate text-right text-xs text-base-content">{value || "—"}</span>
+      <IconChevronDown size={12} stroke={1.8} className={`shrink-0 text-base-content/40 transition-transform ${open ? "rotate-180" : ""}`} />
+    </button>
+    {open && <ul
+      role="listbox"
+      aria-label={label}
+      className={`absolute inset-x-0 z-40 max-h-52 overflow-y-auto rounded-box border border-base-300 bg-base-100 p-1 shadow-xl ${openAbove ? "bottom-full mb-1" : "top-full mt-1"}`}
+    >
+      {displayedOptions.map((option) => <li key={option}>
+        <button
+          type="button"
+          role="option"
+          aria-selected={option === value}
+          className={`flex h-7 w-full items-center gap-2 rounded-field px-2 text-left text-xs transition-colors ${option === value ? "bg-primary/12 font-medium text-primary" : "text-base-content/80 hover:bg-base-200"}`}
+          onClick={() => { onChange(option); setOpen(false); triggerRef.current?.focus(); }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") { setOpen(false); triggerRef.current?.focus(); }
+            if (event.key === "ArrowDown") { event.preventDefault(); moveFocus(event.currentTarget, 1); }
+            if (event.key === "ArrowUp") { event.preventDefault(); moveFocus(event.currentTarget, -1); }
+          }}
+        >
+          <IconCheck size={12} stroke={2} className={option === value ? "opacity-100" : "opacity-0"} />
+          <span className="truncate">{option || "—"}</span>
+        </button>
+      </li>)}
+    </ul>}
+  </div>;
+}
+
+function pickerColorOf(value: string) {
+  const hex = value.trim().match(/^#([\da-f]{3}|[\da-f]{6})$/i)?.[1];
+  if (hex) return `#${hex.length === 3 ? [...hex].map((part) => part + part).join("") : hex}`;
+  const rgb = value.match(/^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/i);
+  if (!rgb) return "#000000";
+  return `#${rgb.slice(1, 4).map((part) => Math.min(255, Math.max(0, Math.round(Number(part)))).toString(16).padStart(2, "0")).join("")}`;
+}
+
+function ElementColorInput({ label, value, onChange }: { label: string; value: string; onChange(value: string): void }) {
+  return <div className="input input-xs flex min-w-0 items-center gap-1.5 px-2 text-[10px] text-base-content/50">
+    <span className="shrink-0">{label}</span>
+    <input aria-label={label} className="min-w-0 flex-1 text-right text-xs text-base-content" value={value} onChange={(event) => onChange(event.target.value)} />
+    <span
+      className="relative size-4 shrink-0 overflow-hidden rounded border border-base-content/20 shadow-inner"
+      style={{ backgroundImage: "linear-gradient(45deg, #ddd 25%, transparent 25%), linear-gradient(-45deg, #ddd 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #ddd 75%), linear-gradient(-45deg, transparent 75%, #ddd 75%)", backgroundPosition: "0 0, 0 4px, 4px -4px, -4px 0", backgroundSize: "8px 8px" }}
+    >
+      <span className="absolute inset-0" style={{ backgroundColor: value }} />
+      <input
+        type="color"
+        aria-label={`${label} picker`}
+        className="absolute inset-0 size-full cursor-pointer opacity-0"
+        value={pickerColorOf(value)}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </span>
+  </div>;
+}
 
 function downloadDataUrl(dataUrl: string, name = "design-preview.png") {
   const a = document.createElement("a");
@@ -703,32 +810,34 @@ export function DesignPreviewWorkbench({
                 <div className="mt-1.5 grid grid-cols-2 gap-1.5">
                   {(["justifyContent", "alignItems"] as const).map((name) => {
                     const options = name === "justifyContent" ? ["normal", "flex-start", "center", "flex-end", "space-between", "space-around", "space-evenly"] : ["normal", "stretch", "flex-start", "center", "flex-end", "baseline"];
-                    return <label key={name} className="select select-xs flex min-w-0 items-center gap-1 px-2 text-[10px] text-base-content/50">
-                      <span>{t(`design.preview.property.${name}` as MessageKey)}</span>
-                      <select aria-label={t(`design.preview.property.${name}` as MessageKey)} className="min-w-0 flex-1 text-right text-xs text-base-content" value={elementDraft[name]} onChange={(e) => updateElementDraft(name, e.target.value)}>
-                        {!options.includes(elementDraft[name]) && <option value={elementDraft[name]}>{elementDraft[name] || "—"}</option>}
-                        {options.map((option) => <option key={option} value={option}>{option}</option>)}
-                      </select>
-                    </label>;
+                    return <ElementSelect
+                      key={name}
+                      label={t(`design.preview.property.${name}` as MessageKey)}
+                      value={elementDraft[name]}
+                      options={options}
+                      onChange={(value) => updateElementDraft(name, value)}
+                    />;
                   })}
                 </div>
               </section>
               <section className="mt-3 border-t border-base-300 pt-3">
                 <h3 className="text-[10px] font-medium uppercase tracking-wide text-base-content/55">{t("design.preview.section.box")}</h3>
                 <div className="mt-1.5 grid grid-cols-2 gap-1.5">
-                  {(["backgroundColor", "opacity"] as const).map((name) => <label key={name} className="input input-xs flex min-w-0 items-center gap-1 px-2 text-[10px] text-base-content/50">
-                    <span>{t(`design.preview.property.${name}` as MessageKey)}</span>
-                    <input aria-label={t(`design.preview.property.${name}` as MessageKey)} className="min-w-0 flex-1 text-right text-xs text-base-content" value={elementDraft[name]} onChange={(e) => updateElementDraft(name, e.target.value)} />
-                  </label>)}
+                  <ElementColorInput label={t("design.preview.property.backgroundColor")} value={elementDraft.backgroundColor} onChange={(value) => updateElementDraft("backgroundColor", value)} />
+                  <label className="input input-xs flex min-w-0 items-center gap-1 px-2 text-[10px] text-base-content/50">
+                    <span>{t("design.preview.property.opacity")}</span>
+                    <input aria-label={t("design.preview.property.opacity")} className="min-w-0 flex-1 text-right text-xs text-base-content" value={elementDraft.opacity} onChange={(e) => updateElementDraft("opacity", e.target.value)} />
+                  </label>
                 </div>
               </section>
               <section className="mt-3">
                 <h3 className="text-xs font-medium text-base-content/65">{t("design.preview.section.style")}</h3>
                 <div className="mt-1.5 grid grid-cols-2 gap-1.5">
-                  {(["color", "fontSize"] as const).map((name) => <label key={name} className="input input-xs flex min-w-0 items-center gap-1 px-2 text-[10px] text-base-content/50">
-                    <span>{t(`design.preview.property.${name}` as MessageKey)}</span>
-                    <input aria-label={t(`design.preview.property.${name}` as MessageKey)} className="min-w-0 flex-1 text-right text-xs text-base-content" value={elementDraft[name]} onChange={(e) => updateElementDraft(name, e.target.value)} />
-                  </label>)}
+                  <ElementColorInput label={t("design.preview.property.color")} value={elementDraft.color} onChange={(value) => updateElementDraft("color", value)} />
+                  <label className="input input-xs flex min-w-0 items-center gap-1 px-2 text-[10px] text-base-content/50">
+                    <span>{t("design.preview.property.fontSize")}</span>
+                    <input aria-label={t("design.preview.property.fontSize")} className="min-w-0 flex-1 text-right text-xs text-base-content" value={elementDraft.fontSize} onChange={(e) => updateElementDraft("fontSize", e.target.value)} />
+                  </label>
                 </div>
               </section>
               {(["padding", "margin"] as const).map((group) => <section key={group} className="mt-3">
@@ -755,17 +864,14 @@ export function DesignPreviewWorkbench({
                   })}
                 </div>
                 <div className="mt-1.5 grid grid-cols-2 gap-1.5">
-                  <label className="select select-xs flex min-w-0 items-center gap-1 px-2 text-[10px] text-base-content/50">
-                    <span>{t("design.preview.property.borderStyle")}</span>
-                    <select aria-label={t("design.preview.property.borderStyle")} className="min-w-0 flex-1 text-right text-xs text-base-content" value={elementDraft.borderStyle} onChange={(e) => updateElementDraft("borderStyle", e.target.value)}>
-                      {!(["none", "solid", "dashed", "dotted", "double"] as string[]).includes(elementDraft.borderStyle) && <option value={elementDraft.borderStyle}>{elementDraft.borderStyle || "—"}</option>}
-                      {(["none", "solid", "dashed", "dotted", "double"] as const).map((option) => <option key={option} value={option}>{option}</option>)}
-                    </select>
-                  </label>
-                  <label className="input input-xs flex min-w-0 items-center gap-1 px-2 text-[10px] text-base-content/50">
-                    <span>{t("design.preview.property.borderColor")}</span>
-                    <input aria-label={t("design.preview.property.borderColor")} className="min-w-0 flex-1 text-right text-xs text-base-content" value={elementDraft.borderColor} onChange={(e) => updateElementDraft("borderColor", e.target.value)} />
-                  </label>
+                  <ElementSelect
+                    label={t("design.preview.property.borderStyle")}
+                    value={elementDraft.borderStyle}
+                    options={["none", "solid", "dashed", "dotted", "double"]}
+                    onChange={(value) => updateElementDraft("borderStyle", value)}
+                    openAbove
+                  />
+                  <ElementColorInput label={t("design.preview.property.borderColor")} value={elementDraft.borderColor} onChange={(value) => updateElementDraft("borderColor", value)} />
                 </div>
                 <label className="input input-xs mt-1.5 flex items-center gap-1 px-2 text-[10px] text-base-content/50">
                   <span>{t("design.preview.property.borderRadius")}</span>
