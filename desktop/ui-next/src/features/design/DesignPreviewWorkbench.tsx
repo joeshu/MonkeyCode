@@ -23,6 +23,7 @@ type Annotation =
   | { kind: "pen"; points: { x: number; y: number }[] }
   | { kind: "text"; x: number; y: number; text: string };
 type Tool = Annotation["kind"];
+type DrawingAnnotation = Exclude<Annotation, { kind: "text" }>;
 
 const PRESETS = { desktop: 1280, tablet: 768, mobile: 390 } as const;
 
@@ -76,12 +77,12 @@ function pngFileOf(dataUrl: string): File {
   return new File([bytes], `design-feedback-${Date.now()}.png`, { type: "image/png" });
 }
 
-function feedbackOf(url: string, annotations: Annotation[]) {
+function feedbackOf(url: string, annotations: Annotation[], message: string) {
   return [
+    message.trim(),
     `Design preview feedback for ${url}`,
-    "Please review the attached marked preview.",
     `Annotations: ${annotations.length}.`,
-  ].join("\n");
+  ].filter(Boolean).join("\n\n");
 }
 
 export function DesignPreviewWorkbench({
@@ -136,10 +137,13 @@ export function DesignPreviewWorkbench({
   const [capture, setCapture] = useState<string | null>(null);
   const resultImageRef = useRef<string | null>(null);
   const resultAnnotationsRef = useRef<Annotation[]>([]);
+  const resultFeedbackRef = useRef("");
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [tool, setTool] = useState<Tool>("rect");
-  const [annotationText, setAnnotationText] = useState("");
-  const drawing = useRef<Annotation | null>(null);
+  const [textDraft, setTextDraft] = useState<{ x: number; y: number; text: string } | null>(null);
+  const [feedbackText, setFeedbackText] = useState("");
+  const drawing = useRef<DrawingAnnotation | null>(null);
+  const [drawingAnnotation, setDrawingAnnotation] = useState<DrawingAnnotation | null>(null);
   const feedbackSendingRef = useRef(false);
   const [feedbackSending, setFeedbackSending] = useState(false);
 
@@ -166,7 +170,7 @@ export function DesignPreviewWorkbench({
     finally { setFilesLoading(false); }
   }, [sessionId]);
   const report = useCallback((error: unknown) => setStatus(error instanceof Error ? error.message : String(error)), []);
-  const submitFeedback = useCallback(async (image: string, feedbackAnnotations: Annotation[]): Promise<boolean> => {
+  const submitFeedback = useCallback(async (image: string, feedbackAnnotations: Annotation[], message: string): Promise<boolean> => {
     if (feedbackSendingRef.current) return false;
     feedbackSendingRef.current = true;
     setFeedbackSending(true);
@@ -176,7 +180,7 @@ export function DesignPreviewWorkbench({
       const annotated = await annotatedDataUrl(image, feedbackAnnotations);
       if (latestRef.current.sessionId !== forSid) return false;
       const accepted = await composer.sendWithFiles(
-        feedbackOf(address, feedbackAnnotations),
+        feedbackOf(address, feedbackAnnotations, message),
         [pngFileOf(annotated)],
       );
       if (latestRef.current.sessionId !== forSid) return false;
@@ -310,9 +314,10 @@ export function DesignPreviewWorkbench({
       if (liveRef.current !== generation || latestRef.current.sessionId !== sessionId) return;
       const image = resultImageRef.current;
       const resultAnnotations = resultAnnotationsRef.current;
+      const resultFeedback = resultFeedbackRef.current;
       if (action === "download" && image) void downloadAnnotated(image, resultAnnotations).catch(report);
       if (action === "send" && image) {
-        void submitFeedback(image, resultAnnotations).then((sent) => {
+        void submitFeedback(image, resultAnnotations, resultFeedback).then((sent) => {
           if (sent) void previewResultHide().catch(report);
         });
       }
@@ -376,7 +381,7 @@ export function DesignPreviewWorkbench({
     try {
       const result = await requestCapture("viewport");
       if (latestRef.current.sessionId !== sessionId) return;
-      setCapture(result.dataUrl); setAnnotations([]); setAnnotationText(""); setStatus(result.clipboardError ?? "");
+      setCapture(result.dataUrl); setAnnotations([]); setTextDraft(null); setFeedbackText(""); setStatus(result.clipboardError ?? "");
     } catch (error) { report(error); }
   };
   const closeCapture = () => {
@@ -384,39 +389,54 @@ export function DesignPreviewWorkbench({
     if (!image) return;
     resultImageRef.current = image;
     resultAnnotationsRef.current = annotations;
+    resultFeedbackRef.current = feedbackText;
     setCapture(null);
     void previewResultShow(image, t("design.preview.annotationReady"), annotations.length).catch(report);
   };
   const sendFeedback = async () => {
     const image = capture;
     if (!image) return;
-    if (await submitFeedback(image, annotations)) closeCapture();
+    if (await submitFeedback(image, annotations, feedbackText)) closeCapture();
   };
 
   const point = (e: ReactPointerEvent<SVGSVGElement>) => {
     const r = e.currentTarget.getBoundingClientRect();
     return { x: ((e.clientX - r.left) / r.width) * 100, y: ((e.clientY - r.top) / r.height) * 100 };
   };
+  const commitTextDraft = (draft = textDraft) => {
+    const text = draft?.text.trim();
+    if (draft && text) setAnnotations((all) => [...all, { kind: "text", x: draft.x, y: draft.y, text }]);
+    setTextDraft(null);
+  };
   const onPointerDown = (e: ReactPointerEvent<SVGSVGElement>) => {
     const p = point(e);
-    e.currentTarget.setPointerCapture(e.pointerId);
     if (tool === "text") {
-      const text = annotationText.trim();
-      if (text) setAnnotations((all) => [...all, { kind: tool, ...p, text }]);
+      setTextDraft({ ...p, text: "" });
       return;
     }
-    drawing.current = tool === "rect" ? { kind: "rect", ...p, width: 0, height: 0 } : { kind: "pen", points: [p] };
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const next: DrawingAnnotation = tool === "rect" ? { kind: "rect", ...p, width: 0, height: 0 } : { kind: "pen", points: [p] };
+    drawing.current = next;
+    setDrawingAnnotation(next);
   };
   const onPointerMove = (e: ReactPointerEvent<SVGSVGElement>) => {
-    if (!drawing.current) return;
+    const current = drawing.current;
+    if (!current) return;
     const p = point(e);
-    if (drawing.current.kind === "rect") {
-      drawing.current.width = p.x - drawing.current.x; drawing.current.height = p.y - drawing.current.y;
-    } else if (drawing.current.kind === "pen") drawing.current.points.push(p);
+    const next: DrawingAnnotation = current.kind === "rect"
+      ? { ...current, width: p.x - current.x, height: p.y - current.y }
+      : { ...current, points: [...current.points, p] };
+    drawing.current = next;
+    setDrawingAnnotation(next);
+  };
+  const onPointerCancel = () => {
+    drawing.current = null;
+    setDrawingAnnotation(null);
   };
   const onPointerUp = () => {
     if (!drawing.current) return;
     const next = drawing.current; drawing.current = null;
+    setDrawingAnnotation(null);
     setAnnotations((all) => [...all, next]);
   };
 
@@ -586,22 +606,43 @@ export function DesignPreviewWorkbench({
         )}
         {capture && (
           <div className="absolute inset-0 z-20 flex flex-col bg-base-200 p-2">
-            <div className="flex shrink-0 flex-wrap gap-1 pb-2">
-              {([['rect', IconSquare], ['pen', IconPencil], ['text', IconCode]] as const).map(([name, Icon]) => <button key={name} className={`btn btn-xs ${tool === name ? "btn-active" : "btn-ghost"}`} onClick={() => setTool(name)}><Icon size={13} /> {t(`design.preview.capture.${name}` as MessageKey)}</button>)}
-              {tool === "text" && <input autoFocus aria-label={t("design.preview.capture.textInput")} placeholder={t("design.preview.capture.textPlaceholder")} className="input input-xs min-w-32 flex-1" value={annotationText} onChange={(e) => setAnnotationText(e.target.value)} />}
+            <div className="flex shrink-0 flex-wrap items-center gap-1 pb-2">
+              {([['rect', IconSquare], ['pen', IconPencil], ['text', IconCode]] as const).map(([name, Icon]) => <button key={name} className={`btn btn-xs ${tool === name ? "btn-active" : "btn-ghost"}`} onClick={() => { setTool(name); setTextDraft(null); }}><Icon size={13} /> {t(`design.preview.capture.${name}` as MessageKey)}</button>)}
               <button className="btn btn-ghost btn-xs ms-auto" onClick={() => setAnnotations((a) => a.slice(0, -1))}><IconArrowBackUp size={13} /> {t("design.preview.undo")}</button>
               <button className="btn btn-ghost btn-xs" onClick={() => setAnnotations([])}><IconTrash size={13} /> {t("design.preview.capture.clear")}</button>
               <button className="btn btn-ghost btn-xs" onClick={() => void downloadAnnotated(capture, annotations).catch(report)}><IconDownload size={13} /> {t("design.preview.capture.download")}</button>
-              <button className="btn btn-primary btn-xs" disabled={feedbackSending} onClick={() => void sendFeedback()}><IconSend size={13} /> {t("design.preview.capture.send")}</button>
               <button aria-label={t("design.preview.closeCapture")} className="btn btn-ghost btn-square btn-xs" onClick={closeCapture}><IconX size={13} /></button>
             </div>
-            <div className="min-h-0 flex-1 overflow-auto">
+            <div className="min-h-0 flex-1 overflow-auto rounded-box bg-base-300/40 p-1">
               <div className="relative w-fit max-w-full">
-              <img src={capture} alt={t("design.preview.capture.image")} className="block max-w-full select-none" draggable={false} />
-              <svg aria-label={t("design.preview.capture.surface")} className="absolute inset-0 size-full touch-none" viewBox="0 0 100 100" preserveAspectRatio="none" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}>
-                {annotations.map((a, i) => a.kind === "rect" ? <rect key={i} x={Math.min(a.x, a.x + a.width)} y={Math.min(a.y, a.y + a.height)} width={Math.abs(a.width)} height={Math.abs(a.height)} fill="none" stroke="red" strokeWidth="0.5" /> : a.kind === "pen" ? <polyline key={i} points={a.points.map((p) => `${p.x},${p.y}`).join(' ')} fill="none" stroke="red" strokeWidth="0.6" /> : <text key={i} x={a.x} y={a.y} fill="red" fontSize="3">{a.text}</text>)}
-              </svg>
+                <img src={capture} alt={t("design.preview.capture.image")} className="block max-w-full select-none" draggable={false} />
+                <svg aria-label={t("design.preview.capture.surface")} className="absolute inset-0 size-full touch-none" viewBox="0 0 100 100" preserveAspectRatio="none" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel}>
+                  {[...annotations, ...(drawingAnnotation ? [drawingAnnotation] : [])].map((a, i) => a.kind === "rect" ? <rect key={i} x={Math.min(a.x, a.x + a.width)} y={Math.min(a.y, a.y + a.height)} width={Math.abs(a.width)} height={Math.abs(a.height)} fill="none" stroke="red" strokeWidth="0.5" /> : a.kind === "pen" ? <polyline key={i} points={a.points.map((p) => `${p.x},${p.y}`).join(' ')} fill="none" stroke="red" strokeWidth="0.6" /> : <text key={i} x={a.x} y={a.y} fill="red" fontSize="3">{a.text}</text>)}
+                </svg>
+                {textDraft && <input
+                  autoFocus
+                  aria-label={t("design.preview.capture.textInput")}
+                  className="input input-sm absolute z-10 min-w-40 border-error bg-base-100/95 text-error shadow-lg focus:outline-none"
+                  style={{ left: `${textDraft.x}%`, top: `${textDraft.y}%`, transform: "translateY(-50%)" }}
+                  value={textDraft.text}
+                  onChange={(e) => setTextDraft((draft) => draft ? { ...draft, text: e.target.value } : null)}
+                  onBlur={(e) => { if (e.currentTarget.dataset.cancelled !== "true") commitTextDraft(); }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") { e.preventDefault(); commitTextDraft(); }
+                    if (e.key === "Escape") { e.currentTarget.dataset.cancelled = "true"; setTextDraft(null); }
+                  }}
+                />}
               </div>
+            </div>
+            <div className="mt-2 flex shrink-0 items-end gap-2 rounded-box border border-base-300 bg-base-100 p-2 shadow-sm transition-[border-color,box-shadow] focus-within:border-primary focus-within:shadow-[0_0_0_3px_color-mix(in_oklab,var(--color-primary)_12%,transparent)]">
+              <textarea
+                aria-label={t("design.preview.capture.feedbackInput")}
+                placeholder={t("design.preview.capture.feedbackPlaceholder")}
+                className="min-h-10 max-h-28 min-w-0 flex-1 resize-none bg-transparent px-1 py-2 text-sm leading-5 outline-none placeholder:text-base-content/35"
+                value={feedbackText}
+                onChange={(e) => setFeedbackText(e.target.value)}
+              />
+              <button aria-label={t("design.preview.capture.send")} className="btn btn-primary btn-circle btn-sm shrink-0" disabled={feedbackSending} onClick={() => void sendFeedback()}><IconSend size={15} /></button>
             </div>
           </div>
         )}

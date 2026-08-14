@@ -1,5 +1,5 @@
 import { StrictMode } from "react";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ComposerCtl } from "@/features/chat/composer/useComposer";
@@ -422,29 +422,50 @@ describe("DesignPreviewWorkbench native lifecycle", () => {
     expect(calls.some((c) => c.cmd === "preview_element_undo")).toBe(true);
   });
 
-  it("provides a visible text input and places its content on the capture", async () => {
+  it("shows a rectangle while it is being dragged", async () => {
+    mount();
+    await userEvent.click(screen.getByRole("button", { name: /Mark/ }));
+
+    const surface = await screen.findByLabelText("Annotation surface");
+    vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({ x: 400, y: 80, left: 400, top: 80, right: 1000, bottom: 480, width: 600, height: 400, toJSON() {} });
+    Object.defineProperty(surface, "setPointerCapture", { value: vi.fn() });
+    fireEvent(surface, new MouseEvent("pointerdown", { bubbles: true, clientX: 460, clientY: 200 }));
+    fireEvent(surface, new MouseEvent("pointermove", { bubbles: true, clientX: 580, clientY: 280 }));
+
+    const rect = surface.querySelector("rect");
+    expect(rect).toBeTruthy();
+    expect(rect?.getAttribute("width")).toBe("20");
+    expect(rect?.getAttribute("height")).toBe("20");
+
+    fireEvent(surface, new MouseEvent("pointercancel", { bubbles: true }));
+    expect(surface.querySelector("rect")).toBeNull();
+  });
+
+  it("opens an inline editor and places its text on the capture", async () => {
     mount();
     await userEvent.click(screen.getByRole("button", { name: /Mark/ }));
     await userEvent.click(await screen.findByRole("button", { name: "Text" }));
 
-    const input = screen.getByLabelText("Annotation text");
-    await userEvent.type(input, "Move this section");
     const surface = screen.getByLabelText("Annotation surface");
-    Object.defineProperty(surface, "setPointerCapture", { value: vi.fn() });
-    await userEvent.pointer({ target: surface, coords: { clientX: 460, clientY: 200 }, keys: "[MouseLeft]" });
+    fireEvent.pointerDown(surface, { clientX: 460, clientY: 200 });
+    const input = screen.getByLabelText("Annotation text");
+    await userEvent.type(input, "Move this section{Enter}");
 
     expect(screen.getByText("Move this section")).toBeTruthy();
   });
 
-  it("composes the captured PNG before using the guarded composer API", async () => {
+  it("sends the Agent message with the composed PNG", async () => {
     mount();
     await userEvent.click(screen.getByRole("button", { name: /Mark/ }));
     expect(await screen.findByRole("img", { name: "Captured preview" })).toBeTruthy();
+    const feedback = screen.getByLabelText("Message to Agent");
+    await userEvent.type(feedback, "Make the hero section more compact");
     await userEvent.click(screen.getByRole("button", { name: /^Send$/ }));
     await waitFor(() => expect(composer.sendWithFiles).toHaveBeenCalledTimes(1));
     const call = vi.mocked(composer.sendWithFiles).mock.calls[0];
     expect(call).toBeDefined();
     const [text, files] = call!;
+    expect(text).toContain("Make the hero section more compact");
     expect(text).toContain("Design preview feedback for http://localhost:5173/app");
     expect(text).toContain("Annotations: 0.");
     expect(files).toHaveLength(1);
