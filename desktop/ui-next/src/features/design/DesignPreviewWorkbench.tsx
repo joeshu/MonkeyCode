@@ -333,7 +333,7 @@ export function DesignPreviewWorkbench({
 }: {
   sessionId: string;
   initialTarget: DesignPreviewTarget;
-  composer: ComposerCtl;
+  composer: Pick<ComposerCtl, "sendWithFiles">;
   obscured: boolean;
   onClose(): void;
 }) {
