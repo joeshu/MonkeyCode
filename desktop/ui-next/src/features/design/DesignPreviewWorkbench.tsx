@@ -464,6 +464,11 @@ export function DesignPreviewWorkbench({
     left: selectedPreviewPosition.left + (picked?.bounds.x ?? 0),
     top: selectedPreviewPosition.top + (picked?.bounds.y ?? 0) + (picked?.bounds.height ?? 0) + 8,
   };
+  const overlayWidth = overlayRef.current?.getBoundingClientRect().width ?? 0;
+  const selectedElementDialogWidth = Math.min(352, Math.max(0, overlayWidth - 24));
+  const selectedElementDialogLeft = Math.max(12, overlayWidth > 0
+    ? Math.min(selectedElementPosition.left, overlayWidth - selectedElementDialogWidth - 12)
+    : selectedElementPosition.left);
 
   return (
     <aside ref={paneRef} aria-label={t("design.preview.workbench")} style={{ width: paneWidth }} className="relative flex min-w-80 shrink-0 flex-col border-s border-base-300 bg-base-100">
@@ -542,14 +547,33 @@ export function DesignPreviewWorkbench({
           <div
             role="dialog"
             aria-label={t("design.preview.element")}
-            className="pointer-events-auto absolute w-80 max-w-[calc(100%-1.5rem)] overflow-auto rounded-box border border-base-300 bg-base-100 p-3 shadow-xl"
-            style={{ left: Math.max(12, selectedElementPosition.left), top: Math.max(12, selectedElementPosition.top) }}
+            className="pointer-events-auto absolute max-h-[calc(100%-1.5rem)] w-[352px] max-w-[calc(100%-1.5rem)] overflow-auto rounded-box border border-primary/25 bg-base-100 p-4 shadow-2xl ring-1 ring-primary/10"
+            style={{ left: selectedElementDialogLeft, top: Math.max(12, selectedElementPosition.top) }}
           >
-            <div className="flex items-center gap-2"><div className="min-w-0 flex-1"><span className="text-xs text-base-content/60">{t("design.preview.element")}</span><strong className="block truncate font-mono text-sm" title={picked.selector}>{picked.tag} · {picked.selector}</strong></div><button aria-label={t("design.preview.close")} className="btn btn-ghost btn-square btn-xs" onClick={() => { setPicked(null); setPickedPreview(null); }}><IconX size={14} /></button></div>
-            <dl className="mt-2 grid grid-cols-[4rem_minmax(0,1fr)] gap-x-2 gap-y-1 text-xs"><dt className="text-base-content/60">{t("design.preview.elementSize")}</dt><dd>{Math.round(picked.bounds.width)}×{Math.round(picked.bounds.height)}</dd><dt className="text-base-content/60">{t("design.preview.elementText")}</dt><dd className="truncate" title={picked.text}>{picked.text || "—"}</dd></dl>
+            <div className="flex items-start gap-3">
+              <div className="flex size-8 shrink-0 items-center justify-center rounded-field bg-primary/12 text-primary">
+                {pickerPurpose === "comment" ? <IconMessage size={16} stroke={1.8} /> : <IconPointer size={16} stroke={1.8} />}
+              </div>
+              <div className="min-w-0 flex-1">
+                <span className="text-xs font-medium text-base-content/60">{t("design.preview.element")}</span>
+                <div className="mt-1 min-w-0">
+                  <strong className="block truncate rounded-field bg-primary/10 px-1.5 py-0.5 font-mono text-xs font-medium text-primary" title={picked.selector}>{picked.tag} · {picked.selector}</strong>
+                </div>
+              </div>
+              <button aria-label={t("design.preview.close")} className="btn btn-ghost btn-square btn-xs -me-1 -mt-1 hover:bg-primary/10 hover:text-primary" onClick={() => { setPicked(null); setPickedPreview(null); }}><IconX size={14} /></button>
+            </div>
+            <dl className="mt-3 grid grid-cols-[3.5rem_minmax(0,1fr)] gap-x-2 gap-y-1.5 rounded-box border border-base-300 bg-base-200/60 px-3 py-2.5 text-xs">
+              <dt className="text-base-content/50">{t("design.preview.elementSize")}</dt>
+              <dd className="font-medium">{Math.round(picked.bounds.width)}×{Math.round(picked.bounds.height)}</dd>
+              <dt className="text-base-content/50">{t("design.preview.elementText")}</dt>
+              <dd className="truncate font-medium" title={picked.text}>{picked.text || "—"}</dd>
+            </dl>
             {pickerPurpose === "comment" ? <>
-              <label className="mt-3 block text-xs"><span>{t("design.preview.commentContent")}</span><textarea autoFocus aria-label={t("design.preview.commentContent")} placeholder={t("design.preview.commentPlaceholder")} className="textarea textarea-sm mt-1 w-full" value={commentText} onChange={(e) => setCommentText(e.target.value)} /></label>
-              <div className="mt-2 flex justify-end"><button className="btn btn-primary btn-sm" disabled={feedbackSending || !commentText.trim()} onClick={() => void submitElementComment()}><IconSend size={14} /> {t("design.preview.sendComment")}</button></div>
+              <label className="mt-3 block text-xs font-medium text-base-content/70">
+                <span>{t("design.preview.commentContent")}</span>
+                <textarea autoFocus aria-label={t("design.preview.commentContent")} placeholder={t("design.preview.commentPlaceholder")} className="textarea mt-1.5 min-h-24 w-full resize-none border-base-300 bg-base-100 text-sm leading-5 transition-[border-color,box-shadow] placeholder:text-base-content/35 focus:border-primary focus:outline-none focus:shadow-[0_0_0_3px_color-mix(in_oklab,var(--color-primary)_15%,transparent)]" value={commentText} onChange={(e) => setCommentText(e.target.value)} />
+              </label>
+              <div className="mt-3 flex justify-end border-t border-base-300 pt-3"><button className="btn btn-primary btn-sm min-w-28" disabled={feedbackSending || !commentText.trim()} onClick={() => void submitElementComment()}><IconSend size={14} /> {t("design.preview.sendComment")}</button></div>
             </> : <>
               <select aria-label={t("design.preview.elementProperty")} className="select select-sm mt-3 w-full" value={property} onChange={(e) => { setProperty(e.target.value); setValue(e.target.value === "text" ? picked.text : ""); }}>
                 <option value="text">{t("design.preview.property.text")}</option><option value="color">{t("design.preview.property.color")}</option><option value="backgroundColor">{t("design.preview.property.background")}</option><option value="fontSize">{t("design.preview.property.fontSize")}</option><option value="opacity">{t("design.preview.property.opacity")}</option><option value="borderRadius">{t("design.preview.property.borderRadius")}</option><option value="delete">{t("design.preview.property.delete")}</option>

@@ -391,6 +391,20 @@ describe("DesignPreviewWorkbench native lifecycle", () => {
     expect(background?.style.height).toBe("380px");
   });
 
+  it("keeps the wider selected-element panel inside the preview overlay", async () => {
+    vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockImplementation(function (this: HTMLElement) {
+      if (this.dataset.previewHost !== undefined) return { x: 500, y: 100, left: 500, top: 100, right: 890, bottom: 480, width: 390, height: 380, toJSON() {} };
+      return { x: 400, y: 80, left: 400, top: 80, right: 1000, bottom: 480, width: 600, height: 400, toJSON() {} };
+    });
+    mount();
+    await userEvent.click(screen.getByRole("button", { name: /Edit/ }));
+    await waitFor(() => expect(events.has("preview-element-picked")).toBe(true));
+    act(() => events.get("preview-element-picked")?.({ payload: { selector: "#hero", text: "Hello", tag: "DIV", bounds: { x: 180, y: 20, width: 10, height: 10 }, styles: {} } }));
+
+    const panel = await screen.findByRole("dialog", { name: "Selected element" });
+    expect(panel.style.left).toContain("236px");
+  });
+
   it("uses backend picker apply and undo actions", async () => {
     mount();
     await userEvent.click(screen.getByRole("button", { name: /Edit/ }));
