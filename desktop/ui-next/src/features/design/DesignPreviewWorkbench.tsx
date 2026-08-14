@@ -386,6 +386,12 @@ export function DesignPreviewWorkbench({
       setCapture(result.dataUrl); setAnnotations([]); setTextDraft(null); setFeedbackText(""); setStatus(result.clipboardError ?? "");
     } catch (error) { report(error); }
   };
+  const cancelCapture = () => {
+    drawing.current = null;
+    setDrawingAnnotation(null);
+    setTextDraft(null);
+    setCapture(null);
+  };
   const closeCapture = () => {
     const image = capture;
     if (!image) return;
@@ -413,6 +419,7 @@ export function DesignPreviewWorkbench({
   const onPointerDown = (e: ReactPointerEvent<SVGSVGElement>) => {
     const p = point(e);
     if (tool === "text") {
+      e.preventDefault();
       setTextDraft({ ...p, text: "" });
       return;
     }
@@ -599,7 +606,7 @@ export function DesignPreviewWorkbench({
         </div>
         <button className="btn btn-ghost btn-xs ms-auto" onClick={() => void takeScreenshot()}><IconCamera size={13} stroke={1.75} /> {t("design.preview.screenshot")}</button>
         <button className={`btn btn-xs ${picker && pickerPurpose === "comment" ? "btn-primary" : "btn-ghost"}`} onClick={() => void togglePicker("comment")}><IconMessage size={13} stroke={1.75} /> {t("design.preview.annotate")}</button>
-        <button className="btn btn-ghost btn-xs" onClick={() => void startCapture()}><IconPencil size={13} stroke={1.75} /> {t("design.preview.mark")}</button>
+        <button className={`btn btn-xs ${capture ? "btn-primary" : "btn-ghost"}`} onClick={() => capture ? cancelCapture() : void startCapture()}><IconPencil size={13} stroke={1.75} /> {t("design.preview.mark")}</button>
         <button className={`btn btn-xs ${picker && pickerPurpose === "edit" ? "btn-primary" : "btn-ghost"}`} onClick={() => void togglePicker("edit")}><IconPointer size={13} stroke={1.75} /> {t("design.preview.edit")}</button>
         <select aria-label={t("design.preview.zoom")} className="select select-xs w-20" value={zoom} onChange={(e) => { const n = Math.min(500, Math.max(10, Number(e.target.value))); setZoom(n); void previewSetZoom(n / 100).catch(report); }}>
           {[10, 25, 50, 75, 100, 125, 150, 200, 300, 400, 500].map((n) => <option key={n} value={n}>{n}%</option>)}

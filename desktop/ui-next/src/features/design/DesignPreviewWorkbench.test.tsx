@@ -481,6 +481,20 @@ describe("DesignPreviewWorkbench native lifecycle", () => {
     await waitFor(() => expect(calls.some((call) => call.cmd === "preview_show")).toBe(true));
   });
 
+  it("toggles marking off and hides its toolbar when Mark is clicked again", async () => {
+    mount();
+    const mark = screen.getByRole("button", { name: /Mark/ });
+
+    await userEvent.click(mark);
+    expect(await screen.findByLabelText("Annotation surface")).toBeTruthy();
+    expect(mark.className).toContain("btn-primary");
+
+    await userEvent.click(mark);
+    expect(screen.queryByLabelText("Annotation surface")).toBeNull();
+    expect(mark.className).toContain("btn-ghost");
+    await waitFor(() => expect(calls.some((call) => call.cmd === "preview_show")).toBe(true));
+  });
+
   it("shows a rectangle while it is being dragged", async () => {
     mount();
     await userEvent.click(screen.getByRole("button", { name: /Mark/ }));
@@ -508,8 +522,10 @@ describe("DesignPreviewWorkbench native lifecycle", () => {
     expect(screen.queryByLabelText("Annotation text")).toBeNull();
     const surface = screen.getByLabelText("Annotation surface");
     vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({ x: 400, y: 80, left: 400, top: 80, right: 1000, bottom: 480, width: 600, height: 400, toJSON() {} });
-    fireEvent.pointerDown(surface, { clientX: 460, clientY: 200 });
+    const pointerDown = new MouseEvent("pointerdown", { bubbles: true, cancelable: true, clientX: 460, clientY: 200 });
+    fireEvent(surface, pointerDown);
 
+    expect(pointerDown.defaultPrevented).toBe(true);
     const input = screen.getByLabelText("Annotation text");
     expect(input.style.left).toBe("10%");
     expect(input.style.top).toBe("30%");
