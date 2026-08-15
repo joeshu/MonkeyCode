@@ -328,7 +328,7 @@ fn preview_zoom() -> Result<f64, String> {
 }
 fn zoom_script(scale: f64) -> String {
     format!(
-        "(()=>{{const target=document.body;if(!target)throw new Error('找不到页面根元素');const root=document.documentElement,body=document.body,s={scale},key='__mcPreviewZoomState',previous=window[key];if(previous){{for(const item of previous){{if(item.value)item.element.style.setProperty(item.name,item.value,item.priority);else item.element.style.removeProperty(item.name)}}delete window[key]}}if(s===1)return;const saved=[];const set=(element,name,value)=>{{if(!saved.some(item=>item.element===element&&item.name===name))saved.push({{element,name,value:element.style.getPropertyValue(name),priority:element.style.getPropertyPriority(name)}});element.style.setProperty(name,value,'important')}};window[key]=saved;const w=root.clientWidth,h=root.clientHeight;set(target,'width',w+'px');set(target,'min-height',h+'px');set(target,'transform','scale('+s+')');set(target,'transform-origin','0 0');set(body,'overflow','visible');set(root,'overflow','auto')}})()"
+        "(()=>{{const target=document.body;if(!target)throw new Error('找不到页面根元素');const root=document.documentElement,body=document.body,s={scale},key='__mcPreviewZoomState',previous=window[key];if(previous){{for(const item of previous){{if(item.value)item.element.style.setProperty(item.name,item.value,item.priority);else item.element.style.removeProperty(item.name)}}delete window[key]}}if(s===1)return;const saved=[];const set=(element,name,value)=>{{if(!saved.some(item=>item.element===element&&item.name===name))saved.push({{element,name,value:element.style.getPropertyValue(name),priority:element.style.getPropertyPriority(name)}});element.style.setProperty(name,value,'important')}};window[key]=saved;const w=root.clientWidth,h=root.clientHeight;set(target,'width',w+'px');set(target,'min-height',h+'px');const cw=target.scrollWidth,ch=target.scrollHeight,offX=Math.max(0,(w-cw*s)/2),offY=Math.max(0,(h-ch*s)/2);set(target,'transform','translateX('+offX+'px) translateY('+offY+'px) scale('+s+')');set(target,'transform-origin','0 0');set(body,'overflow','visible');set(root,'overflow','auto');const scroller=document.scrollingElement||root;scroller.scrollLeft=Math.max(0,(cw*s-w)/2)}})()"
     )
 }
 fn apply_zoom(view: &tauri::Webview, scale: f64) -> Result<(), String> {
@@ -1032,8 +1032,12 @@ mod tests {
         assert!(script.contains("const target=document.body"));
         assert!(!script.contains("body.firstElementChild"));
         assert!(script.contains("set(target,'width',w+'px')"));
-        assert!(script.contains("set(target,'transform','scale('+s+')')"));
+        assert!(script.contains(
+            "'transform','translateX('+offX+'px) translateY('+offY+'px) scale('+s+')'"
+        ));
         assert!(script.contains("set(target,'transform-origin','0 0')"));
+        assert!(script.contains("Math.max(0,(w-cw*s)/2)"));
+        assert!(script.contains("scroller.scrollLeft=Math.max(0,(cw*s-w)/2)"));
         assert!(script.contains("s=0.75"));
         assert!(
             script.contains("item.element.style.setProperty(item.name,item.value,item.priority)")
