@@ -30,19 +30,29 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
 /// 内置技能的**出厂**缺省启用集:云端建任务的 MC_DEFAULT_SKILL_IDS 四件套
-/// (baizhi/monkeycode.rs)+ 桌面端补充的 publish-website(把本会话产出的
-/// Web 项目发布上线,官方库专为 pc-client 收录)。官方库全默认启用会把
-/// system prompt 塞满几十条 name+description,故其余按需勾选。用户自建
-/// 技能不受此表限制,出厂恒默认启用——亲手写的技能就是要用的。出厂规则
-/// 之上是用户显式开关(skills-defaults.json,见 load_default_prefs):
-/// 没拨过的技能跟随出厂,拨过的以开关为准。解析结果经 skills_list 的
-/// default_enabled 字段下发,UI 不再自持一份规则镜像。
-pub const DEFAULT_ENABLED: [&str; 5] = [
+/// (baizhi/monkeycode.rs)+ 桌面端补充的发布与设计流技能。设计技能仍经
+/// plugins/skills 技能库发现、用户覆盖与按会话物化，不另设协议或模式入口。
+/// 官方库全默认启用会把 system prompt 塞满几十条 name+description,故其余
+/// 按需勾选。用户自建技能不受此表限制,出厂恒默认启用——亲手写的技能就是
+/// 要用的。出厂规则之上是用户显式开关(skills-defaults.json,见
+/// load_default_prefs):没拨过的技能跟随出厂,拨过的以开关为准。解析结果经
+/// skills_list 的 default_enabled 字段下发,UI 不再自持一份规则镜像。
+pub const DEFAULT_ENABLED: [&str; 15] = [
     "feature-design",
     "project-wiki",
     "feature-implementer",
     "implementation-planner",
     "publish-website",
+    "design-flow",
+    "design-generation",
+    "design-refinement",
+    "frontend-design",
+    "web-design-art-direction",
+    "image-generation",
+    "image-refinement",
+    "visual-design-foundations",
+    "web-component-design",
+    "react-native-design",
 ];
 
 /// 默认启用开关的持久化(<app_config_dir>/skills-defaults.json,
@@ -441,16 +451,19 @@ mod tests {
         let engine = test_dir("mat-engine");
         put_skill(&builtin, "a", "A");
         put_skill(&user, "b", "B");
-        // 辅助资源一并拷贝
-        fs::create_dir_all(user.join("b/references")).unwrap();
-        fs::write(user.join("b/references/x.md"), "ref").unwrap();
+        // references/ 的多层辅助资源一并递归拷贝
+        fs::create_dir_all(user.join("b/references/components")).unwrap();
+        fs::write(user.join("b/references/components/x.md"), "nested ref").unwrap();
 
         let nodefaults = user.join("no-defaults.json");
         let both =
             materialize(&engine, Some(&builtin), &user, &nodefaults, Some(&["a".into(), "b".into()]))
                 .unwrap();
         assert_eq!(both, vec!["a", "b"]);
-        assert!(engine.join("skills/b/references/x.md").is_file());
+        assert_eq!(
+            fs::read_to_string(engine.join("skills/b/references/components/x.md")).unwrap(),
+            "nested ref"
+        );
 
         let only_b =
             materialize(&engine, Some(&builtin), &user, &nodefaults, Some(&["b".into()])).unwrap();
@@ -469,35 +482,69 @@ mod tests {
     }
 
     #[test]
-    fn default_set_is_factory_rule_overridden_by_prefs() {
+    fn design_skills_are_factory_enabled_and_user_prefs_override_them() {
+        const DESIGN_SKILLS: [&str; 10] = [
+            "design-flow",
+            "design-generation",
+            "design-refinement",
+            "frontend-design",
+            "web-design-art-direction",
+            "image-generation",
+            "image-refinement",
+            "visual-design-foundations",
+            "web-component-design",
+            "react-native-design",
+        ];
+        for name in DESIGN_SKILLS {
+            assert!(DEFAULT_ENABLED.contains(&name), "设计流技能应默认启用: {name}");
+        }
+
         let builtin = test_dir("def-builtin");
         let user = test_dir("def-user");
         let engine = test_dir("def-engine");
-        put_skill(&builtin, "feature-design", "官方默认项");
+        for name in DESIGN_SKILLS {
+            put_skill(&builtin, name, &format!("{name} 官方技能"));
+        }
         put_skill(&builtin, "tailwindcss-helper", "官方非默认项");
         put_skill(&user, "my-skill", "用户技能出厂默认启用");
 
-        // 无开关文件:纯出厂规则
+        // 无开关文件:设计流全套与用户技能走出厂默认，其他官方技能不启用。
         let def =
             materialize(&engine, Some(&builtin), &user, &user.join("no-defaults.json"), None)
                 .unwrap();
-        assert_eq!(def, vec!["feature-design", "my-skill"]);
+        for name in DESIGN_SKILLS {
+            assert!(def.iter().any(|enabled| enabled == name), "缺少默认设计技能: {name}");
+            assert!(engine.join("skills").join(name).join("SKILL.md").is_file());
+        }
+        assert!(def.iter().any(|enabled| enabled == "my-skill"));
         assert!(!engine.join("skills/tailwindcss-helper").exists());
 
-        // 显式开关压过出厂:关掉官方默认项、打开非默认项与用户技能关闭
+        // 用户显式开关压过出厂:关掉默认设计技能和用户技能，打开非默认项。
         let prefs_path = test_dir("def-prefs").join("skills-defaults.json");
         fs::write(
             &prefs_path,
-            r#"{"feature-design": false, "tailwindcss-helper": true, "my-skill": false}"#,
+            r#"{"design-flow": false, "tailwindcss-helper": true, "my-skill": false}"#,
         )
         .unwrap();
         let def = materialize(&engine, Some(&builtin), &user, &prefs_path, None).unwrap();
-        assert_eq!(def, vec!["tailwindcss-helper"]);
-        // list() 的 default_enabled 与物化同一解析
+        assert!(!def.iter().any(|enabled| enabled == "design-flow"));
+        assert!(def.iter().any(|enabled| enabled == "design-generation"));
+        assert!(def.iter().any(|enabled| enabled == "tailwindcss-helper"));
+        assert!(!def.iter().any(|enabled| enabled == "my-skill"));
+        assert!(!engine.join("skills/design-flow").exists());
+
+        // list() 的 default_enabled 与物化同一解析。
         let infos = list(Some(&builtin), &user, &prefs_path);
-        let on: Vec<&str> =
-            infos.iter().filter(|s| s.default_enabled).map(|s| s.name.as_str()).collect();
-        assert_eq!(on, vec!["tailwindcss-helper"]);
+        let enabled = |name: &str| {
+            infos
+                .iter()
+                .find(|skill| skill.name == name)
+                .map(|skill| skill.default_enabled)
+        };
+        assert_eq!(enabled("design-flow"), Some(false));
+        assert_eq!(enabled("design-generation"), Some(true));
+        assert_eq!(enabled("tailwindcss-helper"), Some(true));
+        assert_eq!(enabled("my-skill"), Some(false));
     }
 
     #[test]

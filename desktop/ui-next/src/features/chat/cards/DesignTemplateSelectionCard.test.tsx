@@ -45,7 +45,7 @@ describe("DesignTemplateSelectionCard", () => {
     expect(refinement.closest("footer")).toBe(templatePanel.lastElementChild);
     expect(screen.getByRole("button", { name: "选择" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "换一批" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "不使用模板" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "不使用设计方向" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "取消" })).toBeNull();
   });
 
@@ -140,7 +140,7 @@ describe("DesignTemplateSelectionCard", () => {
     );
     expect(screen.queryByRole("button", { name: "选择" })).toBeNull();
     expect(screen.queryByRole("button", { name: "换一批" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "不使用模板" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "不使用设计方向" })).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "取消" }));
     await waitFor(() => expect(sender).toHaveBeenCalledWith("design/selection/respond", { request_id: "d1", action: "cancel" }));
     expect(screen.getByRole("status").textContent).toContain("已取消选择");

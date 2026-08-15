@@ -619,12 +619,6 @@ fn write_ohmyagent_config(
     if !secret.is_empty() {
         settings["signing_secret"] = serde_json::json!(secret);
     }
-    #[cfg(debug_assertions)]
-    if let Some(package_path) = std::env::var_os("MC_MONKEYDESIGN_PACKAGE_PATH") {
-        settings["monkeydesign"] = serde_json::json!({
-            "package_path": package_path.to_string_lossy(),
-        });
-    }
     atomic_write_private(
         &dir.join("settings.json"),
         &serde_json::to_vec_pretty(&settings).map_err(|e| e.to_string())?,
@@ -895,6 +889,26 @@ mod tests {
         let settings: serde_json::Value =
             serde_json::from_slice(&fs::read(dir.join("settings.json")).unwrap()).unwrap();
         assert_eq!(settings["permission_mode"], "auto");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 本地 MonkeyDesign Package 已退出 Desktop 默认配置物化；即使开发环境
+    /// 仍残留旧变量，settings 也不得再出现 monkeydesign.package_path。
+    #[test]
+    fn ohmyagent_config_does_not_inject_monkeydesign_package() {
+        let dir = test_dir("no-monkeydesign-package");
+        let _ = fs::remove_dir_all(&dir);
+        let previous = std::env::var_os("MC_MONKEYDESIGN_PACKAGE_PATH");
+        std::env::set_var("MC_MONKEYDESIGN_PACKAGE_PATH", "/legacy/MonkeyDesign");
+        let result = write_ohmyagent_config(&dir, &DesktopConfig::default(), None);
+        match previous {
+            Some(value) => std::env::set_var("MC_MONKEYDESIGN_PACKAGE_PATH", value),
+            None => std::env::remove_var("MC_MONKEYDESIGN_PACKAGE_PATH"),
+        }
+        result.unwrap();
+        let settings: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.join("settings.json")).unwrap()).unwrap();
+        assert!(settings.get("monkeydesign").is_none());
         let _ = fs::remove_dir_all(&dir);
     }
 
