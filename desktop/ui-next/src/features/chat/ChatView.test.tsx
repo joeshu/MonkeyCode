@@ -169,7 +169,7 @@ describe("聊天视图", () => {
 
     emit("frames:s1", [{ type: "task-ended", timestamp: 6, seq: 6 }]);
     await waitFor(() => expect(container.querySelector('[data-design-preview-open="true"]')).toBeTruthy());
-    expect(screen.getByLabelText("Design preview workbench")).toBeTruthy();
+    expect(screen.getByLabelText("设计预览工作台")).toBeTruthy();
   });
 
   it("无 localhost URL 的设计轮结束后自动打开最佳 HTML artifact，普通代码轮不弹", async () => {
@@ -205,7 +205,7 @@ describe("聊天视图", () => {
       { type: "task-ended", seq: 10 },
     ]);
     await waitFor(() => expect(ordinary.ops.some((op) => op.args?.kind === "repo_file_changes")).toBe(true));
-    expect(plain.queryByLabelText("Design preview workbench")).toBeNull();
+    expect(plain.queryByLabelText("设计预览工作台")).toBeNull();
   });
 
   it("本轮写工具可选中 baseline 已 dirty 的 HTML，而不选其他遗留 HTML", async () => {
