@@ -119,7 +119,7 @@
   }
 
   body:has([data-design-preview-open="true"]) .app-session-sidebar {
-    width: 176px;
+    width: 160px;
   }
 }
 

@@ -344,7 +344,7 @@ export function DesignPreviewWorkbench({
   const liveRef = useRef(0);
   const createdRef = useRef(false);
   const artifactCreateQueueRef = useRef(Promise.resolve());
-  const [paneWidth, setPaneWidth] = useState<number | string>("65%");
+  const [paneWidth, setPaneWidth] = useState<number | string>("70%");
   const [target, setTarget] = useState<DesignPreviewTarget>(initialTarget);
   const targetKey = target.kind === "localhost" ? `localhost:${normalizePreviewUrl(target.url) ?? target.url}` : target.kind === "artifact" ? `artifact:${target.path}` : "none";
   const latestRef = useRef({ sessionId, targetKey, targetKind: target.kind });
