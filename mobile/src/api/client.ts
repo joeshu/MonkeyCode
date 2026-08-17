@@ -79,14 +79,20 @@ export function setSessionCookie(cookie: string) {
 
 /** Read the HttpOnly session cookie from the native cookie jar for WS handshakes. */
 export async function syncSessionCookie(url = baseUrl): Promise<string> {
-  try {
-    const cookies = await CookieManager.get(url);
-    const c = cookies?.monkeycode_ai_session;
-    if (c?.value) sessionCookie = `monkeycode_ai_session=${c.value}`;
-  } catch {
-    /* native cookie store may not be ready during cold start */
-  }
-  return sessionCookie;
+  // iOS native cookie-store access can be delayed during cold start. Never let
+  // this optional read prevent the WebSocket handshake from being created.
+  const read = (async () => {
+    try {
+      const cookies = await CookieManager.get(url);
+      const c = cookies?.monkeycode_ai_session;
+      if (c?.value) sessionCookie = `monkeycode_ai_session=${c.value}`;
+    } catch {
+      /* native cookie store may not be ready */
+    }
+    return sessionCookie;
+  })();
+  const timeout = new Promise<string>((resolve) => setTimeout(() => resolve(sessionCookie), 250));
+  return Promise.race([read, timeout]);
 }
 
 export function openWebSocket(url: string): WebSocket {
