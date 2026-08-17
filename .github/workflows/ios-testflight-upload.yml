@@ -8,6 +8,13 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - name: Select newest installed Xcode
+        run: |
+          XCODE=$(find /Applications -maxdepth 1 -type d -name 'Xcode*.app' | sort -V | tail -1)
+          test -n "$XCODE"
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+          xcodebuild -version
+          swift --version
       - uses: actions/setup-node@v4
         with:
           node-version: 22
