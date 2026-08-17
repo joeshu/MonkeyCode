@@ -83,7 +83,7 @@ export class TaskControlClient {
     this.closeSocket();
     let socket: WebSocket;
     try {
-      await syncSessionCookie();
+      void syncSessionCookie();
       socket = openWebSocket(this.buildUrl());
     } catch {
       return;
