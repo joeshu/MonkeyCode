@@ -16,7 +16,7 @@
  * 鉴权：复用会话 Cookie。Android 的 RN WebSocket（OkHttp）会带上共享 Cookie；
  * iOS 多数情况下也会随 NSURLSession 携带。
  */
-import { getBaseUrl, openWebSocket } from './client';
+import { getBaseUrl, openWebSocket, syncSessionCookie } from './client';
 import { base64Encode } from '@/messages/base64';
 import {
   TaskMessageHandler,
@@ -161,9 +161,10 @@ export class TaskStreamClient {
 
   /* ----------------------------- 内部 ----------------------------- */
 
-  private openSocket() {
+  private async openSocket() {
     let socket: WebSocket;
     try {
+      await syncSessionCookie();
       socket = openWebSocket(this.buildUrl());
     } catch {
       this.connectionState = 'closed';
