@@ -151,15 +151,37 @@ async fn mc_user(svc: &Service) -> BzResult<Value> {
 /// 里的"MD5 加密后的值"已过时,mobile/web 前端都发明文,勿做前端哈希)。
 /// 服务端把密码错/用户不存在等业务失败统一折叠为「登录失败」(code 10606),
 /// 经 ENV_MC 解包原样透传。
+/// 读取私有部署服务配置。旧服务或配置接口异常时保持验证码默认开启，
+/// 不改变官方云和旧版本服务的登录行为。
+async fn mc_captcha_enabled(svc: &Service) -> bool {
+    let target = format!("{}/api/v1/server/config", svc.ep.monkeycode);
+    let Ok((data, status)) = svc.do_store(&svc.mc, reqwest::Method::GET, &target, None).await else {
+        return true;
+    };
+    if !(200..300).contains(&status) {
+        return true;
+    }
+    let Ok(body) = serde_json::from_slice::<Value>(&data) else {
+        return true;
+    };
+    let config = body.get("data").unwrap_or(&body);
+    config.get("captcha_enabled").and_then(Value::as_bool).unwrap_or(true)
+}
+
 pub async fn login_monkeycode_password(svc: &Service, email: &str, password: &str) -> BzResult<Value> {
-    // 验证码打 MonkeyCode 域;罐传 mc——罐决定 Set-Cookie 吸收方向,
-    // 用百智罐会把 mc 域 cookie 混进百智罐,破坏双罐隔离
-    let captcha = svc.captcha_token_at(&svc.ep.monkeycode, &svc.mc, "MonkeyCode ").await?;
+    // 私有部署的 server/config 返回 captcha_enabled=false 时，直接登录；
+    // 未知或旧服务默认走验证码，保持官方云兼容。
+    let mut payload = json!({ "email": email, "password": password });
+    if mc_captcha_enabled(svc).await {
+        // 验证码打 MonkeyCode 域;罐传 mc——罐决定 Set-Cookie 吸收方向
+        let captcha = svc.captcha_token_at(&svc.ep.monkeycode, &svc.mc, "MonkeyCode ").await?;
+        payload["captcha_token"] = json!(captcha);
+    }
     mc_call(
         svc,
         reqwest::Method::POST,
         "/api/v1/users/password-login",
-        Some(&json!({ "email": email, "password": password, "captcha_token": captcha })),
+        Some(&payload),
     )
     .await?;
     confirm_mc_login(svc).await
