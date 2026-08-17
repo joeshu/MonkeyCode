@@ -260,11 +260,19 @@ export async function request<T = unknown>(
 
 /* ----------------------------- 具体接口 ----------------------------- */
 
-export function login(email: string, password: string, captchaToken: string) {
+export function login(email: string, password: string, captchaToken?: string) {
+  const body: Record<string, string> = { email, password };
+  if (captchaToken) body.captcha_token = captchaToken;
   return request<UserStatus>('/api/v1/users/password-login', {
     method: 'POST',
-    body: { email, password, captcha_token: captchaToken },
+    body,
   });
+}
+
+/** Private deployments may disable PoW with /api/v1/server/config. */
+export async function getServerConfig(): Promise<{ captcha_enabled?: boolean }> {
+  const resp = await request<{ captcha_enabled?: boolean }>('/api/v1/server/config');
+  return resp.data ?? {};
 }
 
 /**
