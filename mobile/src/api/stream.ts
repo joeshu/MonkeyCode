@@ -164,7 +164,7 @@ export class TaskStreamClient {
   private async openSocket() {
     let socket: WebSocket;
     try {
-      await syncSessionCookie();
+      void syncSessionCookie();
       socket = openWebSocket(this.buildUrl());
     } catch {
       this.connectionState = 'closed';
