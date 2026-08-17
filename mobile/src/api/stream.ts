@@ -17,7 +17,7 @@
  * iOS 多数情况下也会随 NSURLSession 携带。
  */
 import { getBaseUrl, openWebSocket, syncSessionCookie } from './client';
-import { base64Encode } from '@/messages/base64';
+import { base64Encode, bytesToUtf8 } from '@/messages/base64';
 import {
   TaskMessageHandler,
   type HandlerState,
@@ -192,12 +192,7 @@ export class TaskStreamClient {
     };
 
     socket.onmessage = (event: { data: any }) => {
-      try {
-        const chunk = JSON.parse(event.data);
-        this.handleServerChunk(chunk);
-      } catch {
-        /* ignore malformed frame */
-      }
+      void this.handleFrame(event?.data);
     };
 
     socket.onerror = () => {
@@ -222,6 +217,28 @@ export class TaskStreamClient {
       this.emit();
       this.cb.onClose?.();
     };
+  }
+
+  private async handleFrame(frame: any) {
+    try {
+      let text = '';
+      if (typeof frame === 'string') {
+        text = frame;
+      } else if (frame && typeof frame.text === 'function') {
+        text = await frame.text();
+      } else if (frame instanceof ArrayBuffer) {
+        text = bytesToUtf8(new Uint8Array(frame));
+      } else if (frame && ArrayBuffer.isView(frame)) {
+        text = bytesToUtf8(new Uint8Array(frame.buffer, frame.byteOffset, frame.byteLength));
+      } else if (frame?.data && typeof frame.data === 'string') {
+        text = frame.data;
+      }
+      if (!text) return;
+      const chunk = JSON.parse(text) as ServerChunk;
+      this.handleServerChunk(chunk);
+    } catch {
+      // RN iOS may deliver a non-text frame; ignore only that frame and keep the socket alive.
+    }
   }
 
   private handleServerChunk(chunk: ServerChunk) {
