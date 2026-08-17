@@ -606,6 +606,7 @@ function normalizeDesignRequest(raw: unknown): DesignTemplateSelectionItem | nul
   return {
     kind: "design-template-selection",
     requestId: data.request_id,
+    mode: data.mode === "template" ? "template" : "direction",
     ...(typeof data.title === "string" ? { title: data.title } : {}),
     ...(typeof data.description === "string" ? { description: data.description } : {}),
     items,

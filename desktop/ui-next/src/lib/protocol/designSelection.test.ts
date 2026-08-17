@@ -21,6 +21,7 @@ describe("design template selection reducer", () => {
     const first = reduceFrame(createChatState(), request);
     expect(card(first)).toMatchObject({
       requestId: "design-1",
+      mode: "direction",
       state: "open",
       allowedActions: { select: true, next: true, direct: true, cancel: true },
     });
@@ -31,6 +32,14 @@ describe("design template selection reducer", () => {
     }));
     expect(updated.items).toHaveLength(1);
     expect(card(updated)).toMatchObject({ title: "Updated", allowedActions: { select: true, next: false, direct: false, cancel: false } });
+  });
+
+  it("preserves explicit template mode", () => {
+    const state = reduceFrame(createChatState(), frame("design-template-selection-request", {
+      ...(request.data as object),
+      mode: "template",
+    }));
+    expect(card(state).mode).toBe("template");
   });
 
   it("handles response/cancellation and never reopens terminal duplicate cards", () => {

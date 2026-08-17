@@ -37,6 +37,12 @@ fn validate_design_selection_request(
             return Err(());
         }
     }
+    if params
+        .get("mode")
+        .is_some_and(|v| !v.is_null() && !matches!(v.as_str(), Some("template" | "direction")))
+    {
+        return Err(());
+    }
     let items = params.get("items").and_then(Value::as_array).ok_or(())?;
     let mut item_ids = std::collections::HashSet::new();
     for item in items {

@@ -172,13 +172,14 @@ function TerminalDesign({
   const action = response?.action ?? item.action;
   const selectedId = response?.selected_id ?? item.selectedId;
   const selected = item.items.find((candidate) => candidate.id === selectedId);
+  const actionKey = action === "direct" && item.mode === "template" ? "skipTemplate" : action ?? "cancel";
   let label = unanswered
     ? t("chat.design.unanswered")
     : item.state === "cancelled"
       ? t("chat.design.cancelled")
       : item.state === "expired"
         ? t("chat.design.expired")
-        : t(`chat.design.action.${action ?? "cancel"}`);
+        : t(`chat.design.action.${actionKey}`);
   if (selected) label += ` · ${selected.title}`;
   if (item.reason) label += ` · ${item.reason}`;
 
@@ -233,6 +234,7 @@ export function DesignTemplateSelectionCard({
   loadHtml?: (path: string) => Promise<string>;
 }) {
   const { t } = useI18n();
+  const isTemplate = item.mode === "template";
   const [selectedId, setSelectedId] = useState<string>();
   const [refinement, setRefinement] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -303,7 +305,7 @@ export function DesignTemplateSelectionCard({
             {failed && <span role="alert" className="me-auto text-xs text-error">{t("chat.design.submitFailed")}</span>}
             {item.allowedActions.next && <button type="button" className="btn btn-outline btn-xs" disabled={submitting} onClick={() => { setConfirming(false); void submit("next"); }}>{t("chat.design.next")}</button>}
             <button type="button" className="btn btn-outline btn-xs" disabled={submitting} onClick={() => { setConfirming(false); setFailed(false); }}>{t("chat.design.reselect")}</button>
-            <button type="button" className="btn btn-primary btn-sm" disabled={submitting} onClick={() => void submit("select")}>{submitting ? t("chat.design.submitting") : t("chat.design.confirmDevelopment")}</button>
+            <button type="button" className="btn btn-primary btn-sm" disabled={submitting} onClick={() => void submit("select")}>{submitting ? t("chat.design.submitting") : t(isTemplate ? "chat.design.confirmTemplate" : "chat.design.confirmDevelopment")}</button>
           </div>
         </footer>
       </section>
@@ -378,7 +380,7 @@ export function DesignTemplateSelectionCard({
         <div className={`flex min-w-0 flex-wrap items-center justify-end gap-2 ${item.allowedActions.next && item.refinement?.enabled ? "mt-3" : ""}`}>
           {failed && <span role="alert" className="me-auto text-xs text-error">{t("chat.design.submitFailed")}</span>}
           {!item.allowedActions.select && !item.allowedActions.next && !item.allowedActions.direct && item.allowedActions.cancel && <button type="button" className="btn btn-ghost btn-xs" disabled={submitting} onClick={() => void submit("cancel")}>{t("chat.design.cancel")}</button>}
-          {item.allowedActions.direct && <button type="button" className="btn btn-ghost btn-xs" disabled={submitting} onClick={() => void submit("direct")}>{t("chat.design.direct")}</button>}
+          {item.allowedActions.direct && <button type="button" className="btn btn-ghost btn-xs" disabled={submitting} onClick={() => void submit("direct")}>{t(isTemplate ? "chat.design.skipTemplate" : "chat.design.direct")}</button>}
           {item.allowedActions.next && <button type="button" className="btn btn-outline btn-xs" disabled={submitting} onClick={() => void submit("next")}>{t("chat.design.next")}</button>}
           {item.allowedActions.select && <button type="button" className="btn btn-primary btn-sm" disabled={submitting || !validSelectedId} onClick={() => setConfirming(true)}>{t("chat.design.select")}</button>}
         </div>

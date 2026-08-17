@@ -1294,7 +1294,7 @@ fn design_request_accepts_dynamic_preview_and_keeps_legacy_image_compatibility()
         .unwrap()
         .insert("s1".into(), bare_session("s1"));
     inner.handle_notification("design/template-selection/request", json!({
-        "request_id": "preview-1", "session_id": "s1",
+        "request_id": "preview-1", "session_id": "s1", "mode": "template",
         "items": [
             { "id": "dynamic", "title": "动态", "preview": { "type": "html", "path": ".monkeycode/design-template-previews/dynamic/index.html" } },
             { "id": "image", "title": "新图片", "preview": { "type": "image", "path": "image.png" } },
@@ -1307,6 +1307,30 @@ fn design_request_accepts_dynamic_preview_and_keeps_legacy_image_compatibility()
             .len(),
         3
     );
+}
+
+#[test]
+fn design_request_rejects_unknown_selection_mode() {
+    let inner = bare_inner("design-preview-mode");
+    inner
+        .sess
+        .sessions
+        .lock()
+        .unwrap()
+        .insert("s1".into(), bare_session("s1"));
+    inner.handle_notification(
+        "design/template-selection/request",
+        json!({
+            "request_id": "preview-1", "session_id": "s1", "mode": "unknown",
+            "items": [{ "id": "image", "title": "图片", "image": "image.png" }]
+        }),
+    );
+    assert!(inner
+        .sess
+        .pending_design_selections
+        .lock()
+        .unwrap()
+        .is_empty());
 }
 
 #[test]

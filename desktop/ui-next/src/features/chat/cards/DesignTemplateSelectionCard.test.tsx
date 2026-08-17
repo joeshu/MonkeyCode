@@ -8,6 +8,7 @@ import { createDesignTemplateBlobUrl, DesignTemplateSelectionCard } from "./Desi
 const ITEM: DesignTemplateSelectionItem = {
   kind: "design-template-selection",
   requestId: "d1",
+  mode: "direction",
   title: "Visual direction",
   description: "Pick one",
   items: [
@@ -47,6 +48,21 @@ describe("DesignTemplateSelectionCard", () => {
     expect(screen.getByRole("button", { name: "换一批" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "不使用设计方向" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "取消" })).toBeNull();
+  });
+
+  it("uses template-specific confirmation and skip labels", async () => {
+    const sender = vi.fn();
+    render(<DesignTemplateSelectionCard item={{ ...ITEM, mode: "template" }} sessionId="s1" sendFrame={sender} />);
+    await userEvent.click(screen.getByRole("button", { name: /Clean/ }));
+    await userEvent.click(screen.getByRole("button", { name: "选择" }));
+
+    expect(screen.getByRole("button", { name: "按此模板开发" })).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "重新选择" }));
+    const skip = screen.getByRole("button", { name: "不使用模板" });
+    expect(skip).toBeTruthy();
+    await userEvent.click(skip);
+    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("已选择不使用模板"));
+    expect(sender).toHaveBeenLastCalledWith("design/selection/respond", { request_id: "d1", action: "direct" });
   });
 
   it("confirms the selected design before sending, retries on failure, then becomes terminal", async () => {

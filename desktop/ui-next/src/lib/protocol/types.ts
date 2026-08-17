@@ -267,10 +267,13 @@ export interface DesignSelectionResponse {
   refinement_text?: string;
 }
 
+export type DesignSelectionMode = "template" | "direction";
+
 /** 防御性正规化后的设计选择请求卡。 */
 export interface DesignTemplateSelectionItem {
   kind: "design-template-selection";
   requestId: string;
+  mode: DesignSelectionMode;
   title?: string;
   description?: string;
   items: DesignTemplateItem[];
