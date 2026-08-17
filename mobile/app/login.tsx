@@ -6,7 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Defs, LinearGradient as SvgLinearGradient, Rect, Stop } from 'react-native-svg';
 import { WebView, type WebViewNavigation } from 'react-native-webview';
 import { BAIZHI_BASE_URL, getBaizhiOAuthLoginUrl, getMonkeyCodeBaizhiLoginUrl } from '@/api/baizhi';
-import { ApiError, authHeaders, basicAuthCredential as getBasicAuthCred, DEFAULT_BASE_URL } from '@/api/client';
+import { ApiError, authHeaders, basicAuthCredential as getBasicAuthCred, DEFAULT_BASE_URL, OFFICIAL_BASE_URL } from '@/api/client';
 import { useAuth } from '@/auth/AuthContext';
 import { Icons } from '@/components/Icons';
 import { authorizeAlipay, clearPendingAlipayAuthorization, consumePendingAlipayAuthorization } from '@/native/alipayAuth';
@@ -152,7 +152,7 @@ export default function LoginScreen() {
   const alipayCompletingRef = useRef('');
 
   // 手机号 / 支付宝 / 抖音 / GitHub 登录入口只在官方云展示；私有化 / 自定义地址保持账号密码入口。
-  const cloud = norm(serverUrl || baseUrl) === DEFAULT_BASE_URL;
+  const cloud = norm(serverUrl || baseUrl) === OFFICIAL_BASE_URL;
   const [view, setView] = useState<LoginView>('password');
 
   // Sign in with Apple（App Store Guideline 4.8：提供第三方登录时必须有等效的 Apple 登录）。
@@ -226,6 +226,7 @@ export default function LoginScreen() {
 
   const applyServerSettings = useCallback(async () => {
     const target = norm(serverUrl || baseUrl || DEFAULT_BASE_URL);
+    if (!/^https?:\/\//i.test(target)) throw new Error('服务器地址必须以 http:// 或 https:// 开头');
     if (target && target !== norm(baseUrl)) await updateBaseUrl(target);
     if (basicAuthInput.trim() !== basicAuth) await updateBasicAuth(basicAuthInput.trim());
     return target;
@@ -827,7 +828,15 @@ export default function LoginScreen() {
             </>
           ) : (
             <>
-              <Text style={{ fontSize: 18, fontWeight: '600', color: darkText, letterSpacing: 0 }}>账号密码登录</Text>
+              <Text style={{ fontSize: 18, fontWeight: '600', color: darkText, letterSpacing: 0 }}>{cloud ? '账号密码登录' : '私有化部署登录'}</Text>
+
+              <Text style={{ fontSize: 13, color: mutedText }}>私有化部署地址</Text>
+              <View style={fieldFrameStyle('server')}>
+                <TextInput value={serverUrl} onChangeText={setServerUrl} placeholder="https://your-monkeycode-server" placeholderTextColor="#B4B9B0"
+                  autoCapitalize="none" autoCorrect={false} keyboardType="url" editable={!busy && !codeBusy}
+                  style={inputStyle} {...focusProps('server')} />
+              </View>
+              <Text style={{ color: softText, fontSize: 11.5, marginTop: -8 }}>已预填当前私有化服务；登录成功后会保存此地址。</Text>
 
               <View style={fieldFrameStyle('email')}>
                 <Icons.mail size={19} color={focused === 'email' ? heroGreen : iconIdle} sw={1.9} />
@@ -863,15 +872,10 @@ export default function LoginScreen() {
             </>
           )}
 
-          {/* 服务器设置：默认隐藏，连点 logo 6 次后出现 */}
+          {/* 高级代理设置：连点 logo 6 次后出现；私有化服务地址已在登录表单中常驻。 */}
           {showServer ? (
             <View style={{ marginTop: 16, paddingTop: 16, borderTopWidth: 1, borderColor: t.line }}>
-              <Text style={{ fontSize: 13, color: t.tx2, marginBottom: 8 }}>服务器地址</Text>
-              <TextInput value={serverUrl} onChangeText={setServerUrl} placeholder="https://monkeycode-ai.com" placeholderTextColor={t.tx3}
-                autoCapitalize="none" autoCorrect={false} keyboardType="url" editable={!busy && !codeBusy} style={fieldStyle('server')} {...focusProps('server')} />
-              <Text style={{ color: t.tx3, fontSize: 11.5, marginTop: 8 }}>私有化 / 离线部署可在此填写你的服务地址。</Text>
-
-              <Text style={{ fontSize: 13, color: t.tx2, marginTop: 16, marginBottom: 8 }}>Basic Auth（可选）</Text>
+              <Text style={{ fontSize: 13, color: t.tx2, marginBottom: 8 }}>Basic Auth（可选）</Text>
               <TextInput value={basicAuthInput} onChangeText={setBasicAuthInput} placeholder="用户名:密码" placeholderTextColor={t.tx3}
                 autoCapitalize="none" autoCorrect={false} editable={!busy && !codeBusy} style={fieldStyle('basic')} {...focusProps('basic')} />
               <Text style={{ color: t.tx3, fontSize: 11.5, marginTop: 8 }}>测试环境若有 HTTP Basic Auth 代理鉴权，在此填写「用户名:密码」，会作为 Authorization 头发送。</Text>
