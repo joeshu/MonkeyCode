@@ -24,7 +24,13 @@ jobs:
         run: npx expo prebuild --platform ios --no-install
       - name: Install CocoaPods dependencies
         working-directory: mobile/ios
-        run: pod install --repo-update
+        run: |
+          for attempt in 1 2 3 4 5; do
+            pod install && exit 0
+            echo "pod install failed (attempt ${attempt}); backing off"
+            sleep $((attempt * 20))
+          done
+          exit 1
       - name: Build unsigned iOS app
         working-directory: mobile
         run: |
