@@ -2,6 +2,11 @@ name: Desktop Windows Build
 
 on:
   workflow_dispatch:
+    inputs:
+      release_version:
+        description: "Build version, e.g. v26081701"
+        required: true
+        default: "v26081701"
   push:
     # 发布只认 vYYMMDDNN tag，例如 v26072208。
     tags: ["v[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]"]
@@ -37,7 +42,9 @@ jobs:
       # 应用 UI 与 updater 文件名会按既有逻辑展示为 26072208。
       - name: Set release version from tag
         working-directory: desktop
-        run: python scripts/set_release_version.py "${GITHUB_REF_NAME}"
+        run: RELEASE_REF="${GITHUB_REF_NAME}"
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then RELEASE_REF="${{ inputs.release_version }}"; fi
+          python scripts/set_release_version.py "${RELEASE_REF}"
 
       # 浏览器扩展:随包分发(tauri bundle.resources 引用 dist,缺失会打包失败)
       - name: Build browser extension
