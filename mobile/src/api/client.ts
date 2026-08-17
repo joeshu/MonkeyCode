@@ -31,6 +31,7 @@ import type {
   Wallet,
 } from './types';
 import { base64Encode } from '@/messages/base64';
+import CookieManager from '@react-native-cookies/cookies';
 
 export const OFFICIAL_BASE_URL = 'https://monkeycode-ai.com';
 export const DEFAULT_BASE_URL = 'https://code.69574517.xyz';
@@ -38,6 +39,7 @@ export const DEFAULT_BASE_URL = 'https://code.69574517.xyz';
 let baseUrl = DEFAULT_BASE_URL;
 let basicAuth = ''; // 形如 "user:pass"，用于连接带 HTTP Basic Auth 的测试环境（反向代理层鉴权）
 let onUnauthorized: (() => void) | null = null;
+let sessionCookie = '';
 
 export function setBaseUrl(url: string) {
   baseUrl = url.replace(/\/+$/, '');
@@ -71,9 +73,26 @@ export function basicAuthCredential(): { username: string; password: string } | 
  * RN 的 WebSocket 支持第三个 options 参数透传请求头（TS 类型未声明，故 cast）；
  * 没设置 Basic Auth 时 headers 为空对象，无副作用。
  */
+export function setSessionCookie(cookie: string) {
+  sessionCookie = (cookie || '').trim();
+}
+
+/** Read the HttpOnly session cookie from the native cookie jar for WS handshakes. */
+export async function syncSessionCookie(url = baseUrl): Promise<string> {
+  try {
+    const cookies = await CookieManager.get(url);
+    const c = cookies?.monkeycode_ai_session;
+    if (c?.value) sessionCookie = `monkeycode_ai_session=${c.value}`;
+  } catch {
+    /* native cookie store may not be ready during cold start */
+  }
+  return sessionCookie;
+}
+
 export function openWebSocket(url: string): WebSocket {
-  const WS = WebSocket as unknown as { new (url: string, protocols: undefined, options: { headers: Record<string, string> }): WebSocket };
-  return new WS(url, undefined, { headers: authHeaders() });
+  const WS = WebSocket as unknown as { new (url: string, protocols?: string | string[], options?: { headers?: Record<string, string> }): WebSocket };
+  const headers = { ...authHeaders(), ...(sessionCookie ? { Cookie: sessionCookie } : {}) };
+  return new WS(url, undefined, { headers });
 }
 
 /**
