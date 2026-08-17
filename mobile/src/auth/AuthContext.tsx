@@ -29,6 +29,7 @@ import {
   setBaseUrl,
   setBasicAuth,
   setUnauthorizedHandler,
+  syncSessionCookie,
 } from '@/api/client';
 import type { UserStatus } from '@/api/types';
 
@@ -130,6 +131,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (storedPhone) setSavedPhone(storedPhone);
 
         if (loggedIn === '1') {
+          await syncSessionCookie(url);
           try {
             const u = await getUserStatus();
             if (hasUserIdentity(u)) {
@@ -182,6 +184,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(u);
       setAppleSession(false);
       setAuthenticated(true);
+      await syncSessionCookie();
     },
     [baseUrl],
   );
@@ -199,6 +202,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(resp.data ?? {});
       setAppleSession(true);
       setAuthenticated(true);
+      await syncSessionCookie();
     },
     [],
   );
@@ -261,6 +265,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(u);
       setAppleSession(false);
       setAuthenticated(true);
+      await syncSessionCookie();
     },
     [],
   );
