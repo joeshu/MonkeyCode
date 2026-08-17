@@ -7,7 +7,7 @@
  *       server -> { type:"call-response", data: b64(JSON{ request_id, success, error?, ... }) }
  * 按 request_id 配对。
  */
-import { getBaseUrl, openWebSocket } from './client';
+import { getBaseUrl, openWebSocket, syncSessionCookie } from './client';
 import { base64DecodeToString, base64Encode } from '@/messages/base64';
 
 export interface SwitchModelResponse {
@@ -77,12 +77,13 @@ export class TaskControlClient {
     this.onRepoFileChange = opts.onRepoFileChange;
   }
 
-  connect() {
+  async connect() {
     this.disposed = false;
     const connectionId = ++this.connectionId;
     this.closeSocket();
     let socket: WebSocket;
     try {
+      await syncSessionCookie();
       socket = openWebSocket(this.buildUrl());
     } catch {
       return;
