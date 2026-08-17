@@ -100,9 +100,16 @@ function nextId(): string {
 }
 
 function decodeJSON(data: unknown): any {
+  if (data && typeof data === 'object') return data;
   if (typeof data !== 'string' || !data) return null;
+  const raw = data.trim();
+  // Go's []byte JSON is base64, but older/private servers may return raw JSON.
+  if (raw.startsWith('{') || raw.startsWith('[')) {
+    try { return JSON.parse(raw); } catch { /* try base64 below */ }
+  }
   try {
-    return JSON.parse(base64DecodeToString(data));
+    const decoded = base64DecodeToString(raw);
+    return JSON.parse(decoded);
   } catch {
     return null;
   }
