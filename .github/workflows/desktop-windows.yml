@@ -42,8 +42,11 @@ jobs:
       # 应用 UI 与 updater 文件名会按既有逻辑展示为 26072208。
       - name: Set release version from tag
         working-directory: desktop
-        run: RELEASE_REF="${GITHUB_REF_NAME}"
-          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then RELEASE_REF="${{ inputs.release_version }}"; fi
+        run: |
+          RELEASE_REF="${GITHUB_REF_NAME}"
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            RELEASE_REF="${{ inputs.release_version }}"
+          fi
           python scripts/set_release_version.py "${RELEASE_REF}"
 
       # 浏览器扩展:随包分发(tauri bundle.resources 引用 dist,缺失会打包失败)
