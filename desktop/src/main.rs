@@ -1595,6 +1595,16 @@ fn main() {
                 return Ok(());
             }
 
+            // Remote-only builds intentionally omit the local OhMyAgent sidecar.
+            // Cloud login/tasks remain available through the MonkeyCode IPC commands;
+            // local sessions, local files and local terminal are unavailable.
+            if option_env!("MC_REMOTE_ONLY").is_some() {
+                eprintln!("[desktop] remote-only build: local engine disabled");
+                create_main_window(app.handle(), "index.html");
+                ensure_pet_window(app.handle());
+                return Ok(());
+            }
+
             // 无模型配置时引擎以零模型模式启动，首启向导由 UI 承担。
             // 浏览器桥 + MCP server 先于引擎:配置物化要写入 MCP URL/token,
             // init 后查询一次显式传参(时序依赖由数据流表达,不靠注释约束)
