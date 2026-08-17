@@ -1,0 +1,45 @@
+name: iOS Unsigned IPA
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - name: Install JavaScript dependencies
+        working-directory: mobile
+        run: npm ci
+      - name: Generate native iOS project
+        working-directory: mobile
+        env:
+          CI: "1"
+          EXPO_NO_DOCTOR: "1"
+        run: npx expo prebuild --platform ios --no-install
+      - name: Install CocoaPods dependencies
+        working-directory: mobile/ios
+        run: pod install --repo-update
+      - name: Build unsigned iOS app
+        working-directory: mobile
+        run: |
+          xcodebuild -workspace ios/MonkeyCode.xcworkspace -scheme MonkeyCode -configuration Release -sdk iphoneos -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
+      - name: Package unsigned IPA
+        working-directory: mobile
+        run: |
+          APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" -type d | head -1)
+          test -n "$APP"
+          rm -rf Payload MonkeyCode-unsigned.ipa
+          mkdir Payload
+          cp -R "$APP" Payload/MonkeyCode.app
+          /usr/bin/zip -qry MonkeyCode-unsigned.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MonkeyCode-ios-unsigned
+          path: mobile/MonkeyCode-unsigned.ipa
+          if-no-files-found: error
