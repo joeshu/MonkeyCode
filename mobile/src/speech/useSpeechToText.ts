@@ -11,7 +11,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { NativeModules, PermissionsAndroid, Platform } from 'react-native';
-import { getBaseUrl, openWebSocket } from '@/api/client';
+import { getBaseUrl, openWebSocket, syncSessionCookie } from '@/api/client';
 
 let AudioRecord: {
   init: (o: object) => void;
@@ -138,7 +138,7 @@ export function useSpeechToText({ onText, onError }: { onText: (text: string) =>
 
     let ws: WebSocket;
     // openWebSocket 会带上 Basic Auth 头（用于测试环境的代理鉴权）。
-    try { ws = openWebSocket(speechWsUrl()); } catch { fail('无法连接语音服务'); return; }
+    try { await syncSessionCookie(); ws = openWebSocket(speechWsUrl()); } catch { fail('无法连接语音服务'); return; }
     ws.binaryType = 'arraybuffer';
     wsRef.current = ws;
     ws.onopen = () => { try { ws.send(JSON.stringify({ type: 'start', format: 'pcm', disfluency: false })); } catch { /* noop */ } };
