@@ -236,6 +236,26 @@ export default function TaskDetailScreen() {
 
   useEffect(() => { setAnswerSubmitStates({}); }, [id]);
 
+  // Native iOS WebSocket can be upgraded successfully while its JS frame
+  // callback is delayed. Poll rounds as a safe fallback until live messages arrive.
+  useEffect(() => {
+    if (!id || !interactive) return;
+    let cancelled = false;
+    const pull = async () => {
+      if (cancelled || liveStateRef.current?.messages.length) return;
+      try {
+        const rounds = await getTaskRounds({ id, limit: ROUNDS_PER_FETCH });
+        const decoded = decodeChunks(rounds.chunks ?? []);
+        if (!cancelled && decoded.messages.length && !liveStateRef.current?.messages.length) {
+          setHistoryMessages(decoded.messages);
+        }
+      } catch { /* live WebSocket remains the preferred source */ }
+    };
+    void pull();
+    const timer = setInterval(() => { void pull(); }, 2000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [id, interactive]);
+
   useEffect(() => {
     if (!id || !interactive) return;
     // 控制通道连上即刷新端口/改动；之后由 port_change / repo_file_change 事件驱动刷新（不随每条消息拉取）。
