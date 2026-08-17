@@ -15,6 +15,7 @@
     "@expo/vector-icons": "^15.0.2",
     "@noble/hashes": "^1.6.1",
     "@react-native-async-storage/async-storage": "2.2.0",
+    "@react-native-cookies/cookies": "^6.2.1",
     "@shopify/flash-list": "2.0.2",
     "expo": "^55.0.27",
     "expo-apple-authentication": "~55.0.14",
