@@ -22,6 +22,7 @@ import {
   appleLogin as apiAppleLogin,
   deleteAccount as apiDeleteAccount,
   DEFAULT_BASE_URL,
+  getServerConfig,
   getUserStatus,
   login as apiLogin,
   logout as apiLogout,
@@ -158,7 +159,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const login = useCallback(
     async (email: string, password: string, targetBaseUrl?: string) => {
       const cleanEmail = email.trim();
-      const captchaToken = await obtainCaptchaToken(targetBaseUrl || baseUrl);
+      const serverConfig = await getServerConfig().catch(() => ({ captcha_enabled: true }));
+      const captchaToken = serverConfig.captcha_enabled === false
+        ? undefined
+        : await obtainCaptchaToken(targetBaseUrl || baseUrl);
       await apiLogin(cleanEmail, password, captchaToken);
       // 登录成功后拉取用户信息
       let u: UserStatus = {};
