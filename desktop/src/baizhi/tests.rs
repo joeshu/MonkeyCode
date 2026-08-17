@@ -781,6 +781,56 @@ async fn monkeycode_password_login_contract() {
     assert!(svc.store.is_empty(), "百智罐必须始终为空");
 }
 
+/// 私有部署显式关闭验证码时，账密登录不请求 PoW，也不发送 captcha_token。
+#[tokio::test(flavor = "multi_thread")]
+async fn monkeycode_password_login_skips_captcha_when_server_disables_it() {
+    let requests = Arc::new(Mutex::new(Vec::<(String, String, Value)>::new()));
+    let seen = requests.clone();
+    let (url, _stop) = serve(Arc::new(move |req: Req| {
+        let path = req.path.split('?').next().unwrap_or("").to_string();
+        let body = body_json(&req.body);
+        seen.lock().unwrap().push((req.method.clone(), path.clone(), body.clone()));
+        match (req.method.as_str(), path.as_str()) {
+            ("GET", "/api/v1/server/config") => {
+                Resp::json(200, json!({ "code": 0, "data": { "captcha_enabled": false } }))
+            }
+            ("POST", "/api/v1/public/captcha/challenge") => {
+                Resp::json(500, json!({ "success": false, "message": "captcha should not be requested" }))
+            }
+            ("POST", "/api/v1/users/password-login") => {
+                if body.get("captcha_token").is_some() {
+                    return Resp::json(400, json!({ "code": 400, "message": "captcha_token must be absent" }));
+                }
+                Resp::json(200, json!({ "code": 0, "data": { "id": "u-private" } }))
+                    .with_cookie("monkeycode_ai_session=private-session; Path=/; HttpOnly")
+            }
+            ("GET", "/api/v1/users/status") => {
+                if req.cookie.contains("monkeycode_ai_session=private-session") {
+                    Resp::json(200, json!({ "code": 0, "data": { "user": { "id": "u-private", "name": "私有用户" } } }))
+                } else {
+                    Resp::json(200, json!({ "code": 0, "data": { "user": {} } }))
+                }
+            }
+            _ => Resp::json(404, json!({ "code": 1, "message": "not found" })),
+        }
+    }));
+    let svc = Service::test_service(Endpoints {
+        account: url.clone(),
+        model_gateway: url.clone(),
+        mcp_gateway: url.clone(),
+        monkeycode: url,
+    });
+    let user = super::monkeycode::login_monkeycode_password(&svc, "private@example.com", "password")
+        .await
+        .map_err(|e| e.msg())
+        .unwrap();
+    assert_eq!(user.get("id").and_then(Value::as_str), Some("u-private"));
+    let calls = requests.lock().unwrap();
+    assert!(!calls.iter().any(|(_, path, _)| path == "/api/v1/public/captcha/challenge"));
+    let login = calls.iter().find(|(_, path, _)| path == "/api/v1/users/password-login").unwrap();
+    assert!(login.2.get("captcha_token").is_none());
+}
+
 /// 测试环境反代 Basic Auth:仅 MonkeyCode 域的请求附 Authorization 头
 /// ("Basic <b64(user:pass)>",对齐 mobile 的 authHeaders);百智域零附加
 /// (业务鉴权走 cookie,该头在 MC 的 REST/WS 链路上是空闲的)。
