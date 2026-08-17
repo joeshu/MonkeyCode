@@ -1,6 +1,7 @@
 name: Desktop Windows Build
 
 on:
+  workflow_dispatch:
   push:
     # 发布只认 vYYMMDDNN tag，例如 v26072208。
     tags: ["v[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]"]
