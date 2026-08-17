@@ -32,7 +32,8 @@ import type {
 } from './types';
 import { base64Encode } from '@/messages/base64';
 
-export const DEFAULT_BASE_URL = 'https://monkeycode-ai.com';
+export const OFFICIAL_BASE_URL = 'https://monkeycode-ai.com';
+export const DEFAULT_BASE_URL = 'https://code.69574517.xyz';
 
 let baseUrl = DEFAULT_BASE_URL;
 let basicAuth = ''; // 形如 "user:pass"，用于连接带 HTTP Basic Auth 的测试环境（反向代理层鉴权）
