@@ -1,52 +1,45 @@
-# 手动把某个 Release 已构建好的 iOS IPA 上传到 TestFlight（App Store Connect），不重新构建。
-# 用途：补传 / 重传 / 上传旧版本。前提：该 Release 已附带 *.ipa（由 Client Release 的 publish-release 附加）。
-# 不自动提审——上传后 build 进入 App Store Connect，要上架在网页选该 build 提交即可。
-# 需配 Secrets：APP_STORE_CONNECT_KEY_ID / APP_STORE_CONNECT_ISSUER_ID / APP_STORE_CONNECT_PRIVATE_KEY_BASE64（.p8 的 base64）
-name: iOS Upload to TestFlight (manual)
+name: iOS Unsigned IPA
 
 on:
   workflow_dispatch:
-    inputs:
-      tag:
-        description: "Release tag whose IPA to upload (e.g. v26060901)"
-        required: true
-        type: string
-
-permissions:
-  contents: read
 
 jobs:
-  upload:
-    runs-on: macos-latest
+  build:
+    runs-on: macos-14
     steps:
-      - name: Download IPA from the Release
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - name: Install JavaScript dependencies
+        working-directory: mobile
+        run: npm ci
+      - name: Generate native iOS project
+        working-directory: mobile
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CI: "1"
+          EXPO_NO_DOCTOR: "1"
+        run: npx expo prebuild --platform ios --no-install
+      - name: Install CocoaPods dependencies
+        working-directory: mobile/ios
+        run: pod install --repo-update
+      - name: Build unsigned iOS app
+        working-directory: mobile
         run: |
-          set -euo pipefail
-          mkdir -p ipa
-          gh release download "${{ inputs.tag }}" --repo "${{ github.repository }}" --pattern '*.ipa' --dir ipa
-          ls -lh ipa
-          test -n "$(find ipa -name '*.ipa' | head -1)" || { echo "该 Release 没有 *.ipa 资产：${{ inputs.tag }}"; exit 1; }
-
-      - name: Upload to TestFlight (App Store Connect)
-        shell: bash
-        env:
-          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
-          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
-          ASC_PRIVATE_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY_BASE64 }}
+          xcodebuild -workspace ios/MonkeyCode.xcworkspace -scheme MonkeyCode -configuration Release -sdk iphoneos -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
+      - name: Package unsigned IPA
+        working-directory: mobile
         run: |
-          set -euo pipefail
-          : "${ASC_KEY_ID:?Missing APP_STORE_CONNECT_KEY_ID}"
-          : "${ASC_ISSUER_ID:?Missing APP_STORE_CONNECT_ISSUER_ID}"
-          : "${ASC_PRIVATE_KEY_BASE64:?Missing APP_STORE_CONNECT_PRIVATE_KEY_BASE64}"
-          # altool 约定：API key(.p8) 须放在 ~/.appstoreconnect/private_keys 且命名 AuthKey_<KEY_ID>.p8
-          KEY_DIR="$HOME/.appstoreconnect/private_keys"
-          mkdir -p "$KEY_DIR"
-          KEY_FILE="$KEY_DIR/AuthKey_${ASC_KEY_ID}.p8"
-          echo "$ASC_PRIVATE_KEY_BASE64" | base64 -D > "$KEY_FILE"
-          trap 'rm -f "$KEY_FILE"' EXIT
-          IPA="$(find ipa -name '*.ipa' | head -1)"
-          echo "Uploading $(basename "$IPA") (from ${{ inputs.tag }}) to App Store Connect / TestFlight..."
-          # altool --upload-app 仍可用；若某天被移除可改用 xcrun iTMSTransporter / Transporter.app
-          xcrun altool --upload-app -t ios -f "$IPA" --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
+          APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" -type d | head -1)
+          test -n "$APP"
+          rm -rf Payload MonkeyCode-unsigned.ipa
+          mkdir Payload
+          cp -R "$APP" Payload/MonkeyCode.app
+          /usr/bin/zip -qry MonkeyCode-unsigned.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MonkeyCode-ios-unsigned
+          path: mobile/MonkeyCode-unsigned.ipa
+          if-no-files-found: error
