@@ -1,0 +1,37 @@
+name: Build backend Linux binary
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Source branch
+        required: true
+        default: private-no-captcha
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache: true
+      - name: Build Linux amd64 binary
+        working-directory: backend
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: amd64
+        run: go build -trimpath -ldflags='-s -w' -o ../backend-linux-amd64 ./cmd/server/main.go
+      - uses: actions/upload-artifact@v4
+        with:
+          name: monkeycode-backend-linux-amd64
+          path: backend-linux-amd64
+          if-no-files-found: error
