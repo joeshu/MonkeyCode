@@ -118,6 +118,7 @@ func NewTaskHandler(i *do.Injector) (*TaskHandler, error) {
 	v1.GET("/rounds", web.BindHandler(h.TaskTurns))
 	v1.GET("/user-inputs", web.BindHandler(h.TaskUserInputs))
 	v1.POST("", web.BindHandler(h.Create))
+	v1.POST("/continue", web.BindHandler(h.Continue))
 	v1.PUT("/stop", web.BindHandler(h.Stop))
 	v1.DELETE("/:id", web.BindHandler(h.Delete))
 	v1.PUT("/:id", web.BindHandler(h.Update))
@@ -167,6 +168,16 @@ func (h *TaskHandler) Update(c *web.Context, req domain.UpdateTaskReq) error {
 	if err := h.usecase.Update(c.Request().Context(), user, req); err != nil {
 		return err
 	}
+	return c.Success(nil)
+}
+
+// Continue accepts a task user input over HTTP for native clients.
+func (h *TaskHandler) Continue(c *web.Context, req domain.TaskContinueHTTPReq) error {
+	user := middleware.GetUser(c)
+	if err := h.usecase.Continue(c.Request().Context(), user, req.ID, domain.ContinueTaskReq{
+		Content: []byte(req.Content),
+		Attachments: req.Attachments,
+	}); err != nil { return err }
 	return c.Success(nil)
 }
 
