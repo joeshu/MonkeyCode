@@ -5,7 +5,7 @@ import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Clipboard from 'expo-clipboard';
-import { ApiError, getSubscription, getTaskDetail, getTaskRounds, listModels } from '@/api/client';
+import { ApiError, continueTask, getSubscription, getTaskDetail, getTaskRounds, listModels } from '@/api/client';
 import { TaskControlClient, type PortForwardInfo, type RepoFileChange } from '@/api/control';
 import { TaskStreamClient, type ReplyDeliveryStatus, type StreamState } from '@/api/stream';
 import { MAX_ATTACHMENTS, pickImages, saveImageToAlbum, uploadImage } from '@/api/upload';
@@ -365,43 +365,17 @@ export default function TaskDetailScreen() {
     if (!id || (!body && ready.length === 0)) return;
     if (includeAttachments && attachmentsRef.current.some((a) => a.status === 'uploading')) { flashToast('图片还在上传中…'); return; }
     const atts = ready.map((a) => ({ url: a.url as string, filename: a.name }));
-    const prevLive = liveStateRef.current?.messages ?? [];
-    if (prevLive.length) setHistoryMessages((prev) => [...prev, ...prevLive]);
-    const current = clientRef.current;
-    // Attach mode is writable for the task owner. Reuse it on iOS instead of
-    // tearing down a healthy socket and racing a second native handshake.
-    if (current?.sendUserInputNow(body, atts)) {
-      if (includeAttachments) { setInput(''); clearDraft(); setAttachments([]); }
-      setSending(false);
-      return;
-    }
-    current?.disconnect();
     setSending(true);
-    let settled = false;
-    const failTimer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      setSending(false);
-      flashToast('发送连接超时，请重试');
-    }, 10000);
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(failTimer);
-      setSending(false);
-    };
-    const client = TaskStreamClient.newRound(id, body, atts, {
-      onState: setLive,
-      onReplyStatus: handleReplyStatus,
-      onOpen: () => {
-        finish();
+    continueTask(id, body, atts)
+      .then(() => {
         if (includeAttachments) { setInput(''); clearDraft(); setAttachments([]); }
-      },
-      onClose: () => finish(),
-      onError: () => { finish(); flashToast('发送连接失败，请重试'); },
-    });
-    clientRef.current = client; client.connect();
-  }, [id, setLive, flashToast, clearDraft, handleReplyStatus]);
+        setSending(false);
+      })
+      .catch((e) => {
+        setSending(false);
+        flashToast(e instanceof ApiError ? e.message : '发送失败，请重试');
+      });
+  }, [id, flashToast, clearDraft]);
 
   // 选图 → 逐张上传（先占位预览，上传完回填 url）。受 MAX_ATTACHMENTS 张数限制。
   const onAttach = useCallback(async () => {
