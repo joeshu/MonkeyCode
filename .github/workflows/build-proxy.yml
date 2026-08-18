@@ -27,7 +27,7 @@ jobs:
           CGO_ENABLED: '0'
           GOOS: linux
           GOARCH: amd64
-        run: go mod download && go build -trimpath -ldflags='-s -w' -o ../ios-continue-proxy .
+        run: go mod tidy && go build -trimpath -ldflags='-s -w' -o ../ios-continue-proxy .
       - uses: actions/upload-artifact@v4
         with:
           name: ios-continue-proxy-linux-amd64
