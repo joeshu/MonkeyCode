@@ -77,6 +77,7 @@ export class TaskStreamClient {
   private closeReason: CloseReason = null;
   private lastProcessedSeq: number | null = null;
   private queuedReplies = new Map<string, string>();
+  private openTimer: ReturnType<typeof setTimeout> | null = null;
 
   private constructor(taskId: string, mode: Mode, captureCursor: boolean, cb: Callbacks) {
     this.taskId = taskId;
@@ -164,7 +165,9 @@ export class TaskStreamClient {
   private async openSocket() {
     let socket: WebSocket;
     try {
-      void syncSessionCookie();
+      // Read native iOS cookies before the handshake, but syncSessionCookie is bounded.
+      await syncSessionCookie();
+      if (this.manuallyDisconnected) return;
       socket = openWebSocket(this.buildUrl());
     } catch {
       this.connectionState = 'closed';
@@ -174,8 +177,19 @@ export class TaskStreamClient {
       return;
     }
     this.socket = socket;
+    this.openTimer = setTimeout(() => {
+      if (this.socket !== socket || socket.readyState === WebSocket.OPEN) return;
+      this.manuallyDisconnected = true;
+      this.connectionState = 'closed';
+      this.closeReason = 'unknown';
+      this.emit();
+      this.cb.onError?.();
+      try { socket.close(); } catch { /* ignore */ }
+    }, 8000);
 
     socket.onopen = () => {
+      if (this.openTimer) { clearTimeout(this.openTimer); this.openTimer = null; }
+
       this.reconnectAttempts = 0;
       this.clearReconnectTimer();
       this.connectionState = 'connected';
@@ -200,6 +214,7 @@ export class TaskStreamClient {
     };
 
     socket.onclose = () => {
+      if (this.openTimer) { clearTimeout(this.openTimer); this.openTimer = null; }
       this.socket = null;
       if (!this.manuallyDisconnected && !this.hasReceivedTaskEnded) {
         this.connectionState = 'reconnecting';
@@ -302,11 +317,16 @@ export class TaskStreamClient {
     }
   }
 
-  private sendUserInput(text: string, attachments: UserAttachment[] = []) {
-    this.send({
+  /** Send a follow-up on an already attached writable stream. */
+  sendUserInputNow(text: string, attachments: UserAttachment[] = []): boolean {
+    return this.send({
       type: 'user-input',
       data: base64Encode(JSON.stringify({ content: base64Encode(text), attachments })),
     });
+  }
+
+  private sendUserInput(text: string, attachments: UserAttachment[] = []) {
+    this.sendUserInputNow(text, attachments);
   }
 
   private send(msg: { type: string; data?: string }) {
@@ -316,6 +336,7 @@ export class TaskStreamClient {
   }
 
   private cleanupSocket() {
+    if (this.openTimer) { clearTimeout(this.openTimer); this.openTimer = null; }
     if (this.socket) {
       this.socket.onopen = null as any;
       this.socket.onmessage = null as any;
