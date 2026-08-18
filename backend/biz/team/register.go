@@ -1,15 +1,21 @@
 package team
 
 import (
+	"context"
+	"errors"
+
+	"github.com/google/uuid"
 	"github.com/samber/do"
 
 	v1 "github.com/chaitin/MonkeyCode/backend/biz/team/handler/http/v1"
+	"github.com/chaitin/MonkeyCode/backend/domain"
 	"github.com/chaitin/MonkeyCode/backend/biz/team/repo"
 	"github.com/chaitin/MonkeyCode/backend/biz/team/usecase"
 )
 
 // ProvideTeam 注册 team 模块的服务工厂
 func ProvideTeam(i *do.Injector) {
+	do.ProvideValue(i, domain.MemberManager(&memberManagerStub{}))
 	do.Provide(i, repo.NewTeamGroupUserRepo)
 	do.Provide(i, repo.NewAuditRepo)
 	do.Provide(i, repo.NewTeamDashboardRepo)
@@ -63,3 +69,13 @@ func InvokeTeam(i *do.Injector) {
 	do.MustInvoke[*v1.TeamMCPHandler](i)
 	do.MustInvoke[*v1.TeamOIDCHandler](i)
 }
+
+
+// memberManagerStub keeps the open-source build compatible with the private
+// runtime, where the enterprise member manager is injected separately.
+type memberManagerStub struct{}
+var errMemberManagerUnavailable = errors.New("member management is unavailable in this build")
+func (*memberManagerStub) AddUser(context.Context, *domain.TeamUser, *domain.AddTeamUserReq) (*domain.AddTeamUserResp, error) { return nil, errMemberManagerUnavailable }
+func (*memberManagerStub) AddUserWithPassword(context.Context, *domain.TeamUser, *domain.AddTeamUserReq) (*domain.AddTeamUserWithPasswordResp, error) { return nil, errMemberManagerUnavailable }
+func (*memberManagerStub) AddAdmin(context.Context, *domain.TeamUser, *domain.AddTeamAdminReq) (*domain.AddTeamAdminResp, error) { return nil, errMemberManagerUnavailable }
+func (*memberManagerStub) AutoCreateOIDCMember(context.Context, uuid.UUID, *domain.OIDCExternalUser) (*domain.User, error) { return nil, errMemberManagerUnavailable }
