@@ -34,11 +34,32 @@ func continueHandler(w http.ResponseWriter,r *http.Request){
  cookie:=r.Header.Get("Cookie"); if cookie==""{http.Error(w,"unauthorized",401);return}
  wsURL:=strings.TrimRight(env("BACKEND_WS_BASE","ws://monkeycode-ai-backend:8888"),"/")+"/api/v1/users/tasks/stream?id="+req.ID+"&mode=new"
  h:=http.Header{};h.Set("Cookie",cookie);h.Set("Origin",env("BACKEND_ORIGIN","https://code.69574517.xyz"))
- c,resp,err:=websocket.DefaultDialer.Dial(wsURL,h);if err!=nil{if resp!=nil{http.Error(w,fmt.Sprintf("backend websocket: %s",resp.Status),502)}else{http.Error(w,"backend websocket unavailable",502)};return};defer c.Close()
+ c,resp,err:=websocket.DefaultDialer.Dial(wsURL,h);if err!=nil{if resp!=nil{http.Error(w,fmt.Sprintf("backend websocket: %s",resp.Status),502)}else{http.Error(w,"backend websocket unavailable",502)};return}
+ closeOnError:=true
+ defer func(){if closeOnError{c.Close()}}()
  c.SetReadDeadline(time.Now().Add(15*time.Second))
  b,_:=json.Marshal(payload{Content:base64.StdEncoding.EncodeToString([]byte(req.Content)),Attachments:req.Attachments})
  msg:=stream{Type:"user-input",Data:base64.StdEncoding.EncodeToString(b)}
  if err:=c.WriteJSON(msg);err!=nil{http.Error(w,"send failed",502);return}
- for i:=0;i<8;i++{_,data,err:=c.ReadMessage();if err!=nil{if errors.Is(err,io.EOF){break};http.Error(w,"backend did not acknowledge",502);return};var got stream;if json.Unmarshal(data,&got)==nil&&got.Type=="user-input"{w.Header().Set("Content-Type","application/json");w.WriteHeader(200);io.WriteString(w,`{"code":0,"message":"success"}`);return}}
+ for i:=0;i<8;i++{_,data,err:=c.ReadMessage();if err!=nil{if errors.Is(err,io.EOF){break};http.Error(w,"backend did not acknowledge",502);return};var got stream;if json.Unmarshal(data,&got)==nil&&got.Type=="user-input"{
+   w.Header().Set("Content-Type","application/json");w.WriteHeader(200);io.WriteString(w,`{"code":0,"message":"success"}`)
+   if f,ok:=w.(http.Flusher);ok{f.Flush()}
+   closeOnError=false
+   go drainBackend(c)
+   return
+ }}
  http.Error(w,"backend acknowledgement timeout",504)
+}
+
+// drainBackend keeps the backend task stream alive after the short HTTP
+// acknowledgement has been returned. Closing this socket cancels the Agent
+// execution, so it must remain open until task-ended/task-error or timeout.
+func drainBackend(c *websocket.Conn){
+ defer c.Close()
+ c.SetReadDeadline(time.Now().Add(30*time.Minute))
+ for {
+  _,data,err:=c.ReadMessage();if err!=nil{return}
+  var got stream
+  if json.Unmarshal(data,&got)==nil && (got.Type=="task-ended" || got.Type=="task-error"){return}
+ }
 }
