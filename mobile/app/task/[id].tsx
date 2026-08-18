@@ -95,6 +95,34 @@ function normalizeAskStatus(message: ChatMessage, expirePending: boolean): ChatM
   return nextStatus === message.status ? message : { ...message, status: nextStatus };
 }
 
+// REST rounds returns only a partial/newest round. Merge it instead of
+// replacing the existing conversation, otherwise iOS appears to clear after
+// every follow-up while the web client keeps its live stream state.
+function historyMessageKey(message: ChatMessage): string {
+  if (message.kind === 'tool') return `tool:${message.toolCallId ?? message.time ?? message.id}`;
+  if (message.kind === 'ask') return `ask:${message.askId}:${message.time ?? message.id}`;
+  if (message.time != null) return `${message.kind}:${message.time}`;
+  return `${message.kind}:${'text' in message ? message.text : message.id}`;
+}
+
+function mergeHistoryMessages(existing: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] {
+  const next = [...existing];
+  const indexes = new Map<string, number>();
+  next.forEach((message, index) => indexes.set(historyMessageKey(message), index));
+  for (const message of incoming) {
+    const key = historyMessageKey(message);
+    const index = indexes.get(key);
+    if (index == null) {
+      indexes.set(key, next.length);
+      next.push(message);
+      continue;
+    }
+    const old = next[index];
+    if (JSON.stringify(message).length >= JSON.stringify(old).length) next[index] = message;
+  }
+  return next;
+}
+
 export default function TaskDetailScreen() {
   const t = useTheme();
   const insets = useSafeAreaInsets();
@@ -104,6 +132,8 @@ export default function TaskDetailScreen() {
 
   const [task, setTask] = useState<ProjectTask | null>(null);
   const [historyMessages, setHistoryMessages] = useState<ChatMessage[]>([]);
+  // REST follow-ups must remain visible even while task status/live WS changes.
+  const [restMessages, setRestMessages] = useState<ChatMessage[]>([]);
   const [liveState, setLiveState] = useState<StreamState | null>(null);
   const [cursor, setCursor] = useState<string | undefined>(undefined);
   const [hasMore, setHasMore] = useState(false);
@@ -170,6 +200,7 @@ export default function TaskDetailScreen() {
     draftDirtyRef.current = false;
     setDraftReadyTaskId(null);
     setInput('');
+    setRestMessages([]);
     if (!id) return undefined;
     let active = true;
     AsyncStorage.getItem(taskDraftKey(id))
@@ -239,22 +270,25 @@ export default function TaskDetailScreen() {
   // Native iOS WebSocket can be upgraded successfully while its JS frame
   // callback is delayed. Poll rounds as a safe fallback until live messages arrive.
   useEffect(() => {
-    if (!id || !interactive) return;
+    // Keep polling while the task is not in the VM startup screen. A REST
+    // follow-up can finish between two task-detail polls; stopping here as
+    // soon as status becomes finished used to leave the UI with an empty list.
+    if (!id || starting) return;
     let cancelled = false;
     const pull = async () => {
-      if (cancelled || liveStateRef.current?.messages.length) return;
+      if (cancelled) return;
       try {
         const rounds = await getTaskRounds({ id, limit: ROUNDS_PER_FETCH });
         const decoded = decodeChunks(rounds.chunks ?? []);
-        if (!cancelled && decoded.messages.length && !liveStateRef.current?.messages.length) {
-          setHistoryMessages(decoded.messages);
+        if (!cancelled && decoded.messages.length) {
+          setRestMessages((prev) => mergeHistoryMessages(prev, decoded.messages));
         }
-      } catch { /* live WebSocket remains the preferred source */ }
+      } catch { /* WebSocket remains the preferred live source */ }
     };
     void pull();
     const timer = setInterval(() => { void pull(); }, 2000);
     return () => { cancelled = true; clearInterval(timer); };
-  }, [id, interactive]);
+  }, [id, starting]);
 
   useEffect(() => {
     if (!id || !interactive) return;
@@ -365,6 +399,8 @@ export default function TaskDetailScreen() {
     if (!id || (!body && ready.length === 0)) return;
     if (includeAttachments && attachmentsRef.current.some((a) => a.status === 'uploading')) { flashToast('图片还在上传中…'); return; }
     const atts = ready.map((a) => ({ url: a.url as string, filename: a.name }));
+    const optimisticId = `ios-local-user-${Date.now()}`;
+    setRestMessages((prev) => [...prev, { id: optimisticId, kind: 'user', text: body, attachments: atts, time: Date.now() }]);
     setSending(true);
     continueTask(id, body, atts)
       .then(() => {
@@ -497,8 +533,11 @@ export default function TaskDetailScreen() {
     [liveState?.messages, liveAskExpired],
   );
   const messages = useMemo(
-    () => [...historyMessages.map((m) => normalizeAskStatus(m, true)), ...liveMessages],
-    [historyMessages, liveMessages],
+    () => mergeHistoryMessages(
+      mergeHistoryMessages(historyMessages, restMessages).map((m) => normalizeAskStatus(m, true)),
+      liveMessages,
+    ),
+    [historyMessages, restMessages, liveMessages],
   );
   // 倒置列表：最新在前（视觉底部）。新消息进 data[0]（底部）、历史从 data 末尾（视觉顶部）追加。
   // 初始定位底部、流式吸底、上滑加载历史、展开 toolcall 都由 inverted 天然处理，无需手动 scrollToEnd。
