@@ -467,6 +467,11 @@ export async function getTaskRounds(params: {
   return resp.data ?? {};
 }
 
+export async function listHosts(): Promise<import('./types').Host[]> {
+  const resp = await request<import('./types').HostListResp>('/api/v1/users/hosts');
+  return resp.data?.hosts ?? [];
+}
+
 export async function listModels(): Promise<Model[]> {
   const resp = await request<{ models?: Model[] }>('/api/v1/users/models');
   return resp.data?.models ?? [];
