@@ -27,6 +27,8 @@ import { spacing, useTheme, type Theme } from '@/theme';
 import { formatTokens, modelDisplayName, taskDisplayName } from '@/utils/format';
 
 const ROUNDS_PER_FETCH = 1;
+const HISTORY_PAGE_SIZE = 10;
+const MAX_HISTORY_PAGES = 100;
 const POLL_INTERVAL = 10000;
 const TASK_DRAFT_PREFIX = 'monkeycode:task-draft:';
 // 指令：继续/压缩 直接发消息；重启/重置 走控制通道 restart(load_session)
@@ -245,11 +247,26 @@ export default function TaskDetailScreen() {
     try {
       const detail = await getTaskDetail(id);
       setTask(detail);
-      if (detail?.status === 'finished' || detail?.status === 'error') {
-        const rounds = await getTaskRounds({ id, limit: ROUNDS_PER_FETCH });
-        setHistoryMessages(decodeChunks(rounds.chunks ?? []).messages);
-        setCursor(rounds.next_cursor);
-        setHasMore(!!rounds.has_more && !!rounds.next_cursor);
+      if (detail && detail.status !== 'pending') {
+        // /rounds is cursor-paginated and defaults to one newest round. Load
+        // every page on entry so leaving/re-entering does not hide old turns.
+        let cursor: string | undefined;
+        let all: ChatMessage[] = [];
+        let lastCursor: string | undefined;
+        let more = true;
+        for (let page = 0; page < MAX_HISTORY_PAGES && more; page += 1) {
+          const rounds = await getTaskRounds({ id, cursor, limit: HISTORY_PAGE_SIZE });
+          const decoded = decodeChunks(rounds.chunks ?? []);
+          // Backward pagination returns older rounds; prepend them so the
+          // final array stays chronological for the inverted list.
+          all = mergeHistoryMessages(decoded.messages, all);
+          lastCursor = rounds.next_cursor;
+          more = !!rounds.has_more && !!rounds.next_cursor;
+          cursor = rounds.next_cursor;
+        }
+        setHistoryMessages(all);
+        setCursor(lastCursor);
+        setHasMore(more && !!lastCursor);
       }
     } catch (e) {
       setError(e instanceof ApiError ? e.message : '加载失败');
