@@ -206,6 +206,16 @@ export interface ProviderModelItem {
   model?: string;
 }
 
+export type HostStatus = 'online' | 'offline';
+export interface Host {
+  id?: string;
+  name?: string;
+  hostname?: string;
+  status?: HostStatus;
+  owner?: { id?: string; name?: string; type?: string };
+}
+export interface HostListResp { hosts?: Host[]; }
+
 export interface Image {
   id?: string;
   name?: string;
