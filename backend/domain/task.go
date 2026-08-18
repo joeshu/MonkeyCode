@@ -109,6 +109,13 @@ type CreateTaskReq struct {
 	UsePublicHost bool               `json:"-"`
 }
 
+// TaskContinueHTTPReq is the authenticated HTTP payload for native clients.
+type TaskContinueHTTPReq struct {
+	ID          uuid.UUID        `json:"id" validate:"required"`
+	Content     string           `json:"content" validate:"required"`
+	Attachments []TaskAttachment `json:"attachments"`
+}
+
 type ContinueTaskReq struct {
 	Content     []byte           `json:"content"`
 	Attachments []TaskAttachment `json:"attachments"`
