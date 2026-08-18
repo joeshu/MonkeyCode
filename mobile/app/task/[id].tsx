@@ -367,21 +367,38 @@ export default function TaskDetailScreen() {
     const atts = ready.map((a) => ({ url: a.url as string, filename: a.name }));
     const prevLive = liveStateRef.current?.messages ?? [];
     if (prevLive.length) setHistoryMessages((prev) => [...prev, ...prevLive]);
-    clientRef.current?.disconnect();
+    const current = clientRef.current;
+    // Attach mode is writable for the task owner. Reuse it on iOS instead of
+    // tearing down a healthy socket and racing a second native handshake.
+    if (current?.sendUserInputNow(body, atts)) {
+      if (includeAttachments) { setInput(''); clearDraft(); setAttachments([]); }
+      setSending(false);
+      return;
+    }
+    current?.disconnect();
     setSending(true);
+    let settled = false;
+    const failTimer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      setSending(false);
+      flashToast('发送连接超时，请重试');
+    }, 10000);
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(failTimer);
+      setSending(false);
+    };
     const client = TaskStreamClient.newRound(id, body, atts, {
       onState: setLive,
       onReplyStatus: handleReplyStatus,
       onOpen: () => {
-        if (includeAttachments) {
-          setInput('');
-          clearDraft();
-          setAttachments([]);
-        }
-        setSending(false);
+        finish();
+        if (includeAttachments) { setInput(''); clearDraft(); setAttachments([]); }
       },
-      onClose: () => setSending(false),
-      onError: () => setSending(false),
+      onClose: () => finish(),
+      onError: () => { finish(); flashToast('发送连接失败，请重试'); },
     });
     clientRef.current = client; client.connect();
   }, [id, setLive, flashToast, clearDraft, handleReplyStatus]);
