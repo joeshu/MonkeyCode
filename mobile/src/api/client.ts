@@ -518,6 +518,12 @@ export async function createTask(req: CreateTaskReq): Promise<ProjectTask | null
   return resp.data ?? null;
 }
 
+
+/** Continue a task over HTTP for native clients without reliable WebSocket upgrade. */
+export function continueTask(id: string, content: string, attachments: { url: string; filename: string }[] = []) {
+  return request('/api/v1/users/tasks/continue', { method: 'POST', body: { id, content, attachments } });
+}
+
 export function stopTask(id: string) {
   return request('/api/v1/users/tasks/stop', { method: 'PUT', body: { id } });
 }
