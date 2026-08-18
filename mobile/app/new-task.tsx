@@ -3,10 +3,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ActivityIndicator, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ApiError, createTask, getSubscription, listImages, listModels, listProjects } from '@/api/client';
+import { ApiError, createTask, getSubscription, listHosts, listImages, listModels, listProjects } from '@/api/client';
 import { pickZipFile, uploadFileWithPresignedUrl, type PickedFile } from '@/api/upload';
 import { AiConsentModal, useAiConsent } from '@/components/AiConsent';
-import type { Model, Project } from '@/api/types';
+import type { Host, Model, Project } from '@/api/types';
 import { ConcurrentLimitModal } from '@/components/ConcurrentLimitModal';
 import { Icons, providerIconForUrl } from '@/components/Icons';
 import { MicButton } from '@/components/MicButton';
@@ -57,6 +57,7 @@ export default function NewTaskScreen() {
   const [models, setModels] = useState<Model[]>([]);
   const [plan, setPlan] = useState<string | undefined>(undefined);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [hosts, setHosts] = useState<Host[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
 
@@ -90,10 +91,11 @@ export default function NewTaskScreen() {
   useEffect(() => {
     (async () => {
       try {
-        const [m, imgs, projRes, sub] = await Promise.all([
+        const [m, imgs, projRes, hostRes, sub] = await Promise.all([
           listModels(),
           listImages(),
           listProjects({ limit: 50 }).catch(() => ({ projects: [] as Project[], hasMore: false })),
+          listHosts().catch(() => [] as Host[]),
           getSubscription().catch(() => null),
         ]);
         setModels(m);
@@ -101,6 +103,7 @@ export default function NewTaskScreen() {
         setModelId(pickDefaultModel(m, sub?.plan));
         setImageId(pickDefaultImage(imgs));
         setProjects(projRes.projects);
+        setHosts(hostRes);
       } catch (e) {
         setLoadError(e instanceof ApiError ? e.message : '加载配置失败');
       } finally {
@@ -167,6 +170,8 @@ export default function NewTaskScreen() {
     if (repoKey === ZIP_REPO_KEY && !zipFile) { setError('请选择 zip 文件'); return; }
     setSubmitting(true);
     try {
+      const privateHost = hosts.find((h) => h.status === 'online' && h.id && h.id !== 'public_host');
+      const hostId = privateHost?.id || TASK_DEFAULTS.hostId;
       // zip 上传优先；否则手动输入仓库地址；再否则用所选项目；都没有则不关联仓库（快速开始）
       const manualUrl = repoKey === MANUAL_REPO_KEY ? manualRepo.trim() : '';
       let repo: { repo_url?: string; zip_url?: string; repo_filename?: string } = {};
@@ -182,7 +187,7 @@ export default function NewTaskScreen() {
         content: content.trim(),
         cli_name: TASK_DEFAULTS.cliName,
         model_id: modelId,
-        host_id: TASK_DEFAULTS.hostId,
+        host_id: hostId,
         image_id: imageId,
         task_type: 'develop',
         repo,
@@ -197,7 +202,7 @@ export default function NewTaskScreen() {
     } finally {
       setSubmitting(false);
     }
-  }, [content, imageId, modelId, router, selectedProject, repoKey, manualRepo, zipFile]);
+  }, [content, hosts, imageId, modelId, router, selectedProject, repoKey, manualRepo, zipFile]);
 
   // 仓库行只展示一处信息，避免「快速开始 / 不关联仓库」「名字 / 同名仓库路径」这种左右重复。
   const repoValue = repoKey === ZIP_REPO_KEY
