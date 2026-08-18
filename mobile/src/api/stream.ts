@@ -165,9 +165,10 @@ export class TaskStreamClient {
   private async openSocket() {
     let socket: WebSocket;
     try {
-      // Read native iOS cookies before the handshake, but syncSessionCookie is bounded.
-      await syncSessionCookie();
-      if (this.manuallyDisconnected) return;
+      // Do not block the native iOS WebSocket handshake on CookieManager.
+      // The cookie is already attached by RN in normal cases; sync in background
+      // for the next reconnect instead of preventing this request from leaving.
+      void syncSessionCookie();
       socket = openWebSocket(this.buildUrl());
     } catch {
       this.connectionState = 'closed';
