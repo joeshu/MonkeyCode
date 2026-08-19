@@ -100,26 +100,40 @@ function normalizeAskStatus(message: ChatMessage, expirePending: boolean): ChatM
 // REST rounds returns only a partial/newest round. Merge it instead of
 // replacing the existing conversation, otherwise iOS appears to clear after
 // every follow-up while the web client keeps its live stream state.
-function historyMessageKey(message: ChatMessage): string {
-  if (message.kind === 'tool') return `tool:${message.toolCallId ?? message.time ?? message.id}`;
-  if (message.kind === 'ask') return `ask:${message.askId}:${message.time ?? message.id}`;
-  if (message.time != null) return `${message.kind}:${message.time}`;
-  return `${message.kind}:${'text' in message ? message.text : message.id}`;
+function messageText(message: ChatMessage): string {
+  return 'text' in message ? message.text : message.kind === 'tool' ? message.title : '';
+}
+
+function messageMergeIndex(messages: ChatMessage[], incoming: ChatMessage): number {
+  if (incoming.kind === 'tool' && incoming.toolCallId) {
+    return messages.findIndex((m) => m.kind === 'tool' && m.toolCallId === incoming.toolCallId);
+  }
+  if (incoming.kind === 'ask' && incoming.askId) {
+    return messages.findIndex((m) => m.kind === 'ask' && m.askId === incoming.askId);
+  }
+  const text = messageText(incoming);
+  if (!text) return -1;
+  const time = incoming.time ?? 0;
+  return messages.findIndex((m) => {
+    if (m.kind !== incoming.kind || messageText(m) !== text) return false;
+    const otherTime = m.time ?? 0;
+    // WebSocket and REST timestamps can differ slightly. A short window
+    // identifies the same event while still allowing repeated user text in
+    // separate turns to remain visible.
+    return !time || !otherTime || Math.abs(time - otherTime) <= 10_000;
+  });
 }
 
 function mergeHistoryMessages(existing: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] {
   const next = [...existing];
-  const indexes = new Map<string, number>();
-  next.forEach((message, index) => indexes.set(historyMessageKey(message), index));
   for (const message of incoming) {
-    const key = historyMessageKey(message);
-    const index = indexes.get(key);
-    if (index == null) {
-      indexes.set(key, next.length);
+    const index = messageMergeIndex(next, message);
+    if (index < 0) {
       next.push(message);
       continue;
     }
     const old = next[index];
+    // Keep the richer version when one source has only a partial stream chunk.
     if (JSON.stringify(message).length >= JSON.stringify(old).length) next[index] = message;
   }
   return next;
